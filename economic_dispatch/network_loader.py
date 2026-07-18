@@ -49,7 +49,7 @@ def _loss_lookup(ws) -> dict[frozenset, float]:
     return out
 
 
-def _read_lines(ws, zones: set[str], cap_scale: float = 1.0) -> list[Line]:
+def _read_lines(ws, zones: set[str]) -> list[Line]:
     losses = _loss_lookup(ws)
     lines: list[Line] = []
     for r in range(2, ws.max_row + 1):
@@ -64,19 +64,19 @@ def _read_lines(ws, zones: set[str], cap_scale: float = 1.0) -> list[Line]:
         except (TypeError, ValueError):
             ft = tf = 0.0
         loss = losses.get(frozenset({frm, to}), 0.0)
-        lines.append(Line(frm, to, ft * cap_scale, tf * cap_scale, loss))
+        lines.append(Line(frm, to, ft, tf, loss))
     return lines
 
 
-def load_networks(data_dir: Path, zones: list[str], cap_scale: float = 1.0) -> NetworkData:
+def load_networks(data_dir: Path, zones: list[str]) -> NetworkData:
     path = Path(data_dir) / "Networks.xlsx"
     if not path.exists():
         raise FileNotFoundError(f"Networks workbook not found: {path}")
     zset = set(zones)
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
 
-    elec = _read_lines(wb[SHEET_ELEC], zset, cap_scale)
-    hydrogen = _read_lines(wb[SHEET_H2], zset, cap_scale)
+    elec = _read_lines(wb[SHEET_ELEC], zset)
+    hydrogen = _read_lines(wb[SHEET_H2], zset)
 
     ws = wb[SHEET_DATA]
     co2_price = float(ws.cell(2, 1).value or 0.0)

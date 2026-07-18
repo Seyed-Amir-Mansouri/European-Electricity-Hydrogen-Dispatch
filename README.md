@@ -30,7 +30,6 @@ CLI flags:
 | `--no-ramps` | drop generator ramp limits |
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
-| `--line-scale F` | multiply all elec & H2 line capacities by `F` (transmission sensitivity test) |
 | `--time-limit S` | solver time limit in seconds |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 

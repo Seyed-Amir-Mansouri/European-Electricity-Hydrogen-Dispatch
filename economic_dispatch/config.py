@@ -86,7 +86,6 @@ class RunConfig:
     # --- Physics defaults --------------------------------------------------
     initial_soc_fraction: float = 0.5  # storage state of charge at hour 0
     ramp_scale: float = 1.0            # multiplier on ramp-rate column
-    line_capacity_scale: float = 1.0   # multiplier on all elec & H2 line capacities (sensitivity)
     default_pump_efficiency: float = 0.8   # round-trip eff for pumped hydro if missing
     default_hydro_efficiency: float = 1.0  # reservoir/pondage (water, no conversion loss)
 

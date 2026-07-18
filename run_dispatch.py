@@ -32,8 +32,6 @@ def parse_args() -> RunConfig:
     p.add_argument("--no-ramps", action="store_true")
     p.add_argument("--reserves", action="store_true", help="enable FCR/FRR constraints")
     p.add_argument("--no-h2-terminal", action="store_true")
-    p.add_argument("--line-scale", type=float, default=1.0,
-                   help="multiply all elec & H2 line capacities by this factor (sensitivity test)")
     p.add_argument("--time-limit", type=float, default=600.0, help="solver time limit (s)")
     p.add_argument("--out-tag", default=None,
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
@@ -66,7 +64,6 @@ def parse_args() -> RunConfig:
     cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
     cfg.enable_h2_terminal = not a.no_h2_terminal
-    cfg.line_capacity_scale = a.line_scale
     cfg.time_limit_s = a.time_limit
     cfg.out_tag = a.out_tag
     return cfg
@@ -81,7 +78,7 @@ def run(cfg: RunConfig) -> model.BuildResult:
 
     t = time.time()
     zdata = {z: data_loader.load_zone(z, cfg.data_dir, h0, h1) for z in cfg.zones}
-    net = network_loader.load_networks(cfg.data_dir, cfg.zones, cfg.line_capacity_scale)
+    net = network_loader.load_networks(cfg.data_dir, cfg.zones)
     print(f"Loaded {len(zdata)} zones, {len(net.elec)} elec lines, "
           f"{len(net.hydrogen)} H2 lines  ({time.time() - t:.1f}s)  "
           f"CO2={net.co2_price} EUR/t, gas={net.gas_price} EUR/MWh")
