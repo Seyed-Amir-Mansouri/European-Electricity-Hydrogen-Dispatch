@@ -24,6 +24,7 @@ ALL_ZONES = [
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "XLSXs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs"
+DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "inputs"
 
 HOURS_PER_DAY = 24
 HOURS_PER_YEAR = 8736  # 364 days * 24
@@ -60,7 +61,11 @@ class RunConfig:
     end_day: int = 1                   # 1-based last day (inclusive); == start_day for one day
     data_dir: Path = DEFAULT_DATA_DIR
     output_dir: Path = DEFAULT_OUTPUT_DIR
+    exports_dir: Path = DEFAULT_EXPORTS_DIR
     out_tag: str | None = None         # write to outputs/<out_tag>/ to keep runs side by side
+    # Compute cross-border exchange from the inputs/ result databases (so neighbours
+    # follow the zone selection). Falls back to Excel Exports_* columns if missing.
+    exports_from_db: bool = True
 
     # --- Feature flags -----------------------------------------------------
     enable_storage: bool = True        # battery + hydro reservoir/pumped storage

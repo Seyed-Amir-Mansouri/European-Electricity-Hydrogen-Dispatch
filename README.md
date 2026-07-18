@@ -109,6 +109,20 @@ columns use positive = export; a negative column value is an inflow = supply.)
 `Networks.xlsx` supplies the electricity & hydrogen line topology (directional
 MW limits + loss fractions) and global CO2 & gas prices.
 
+### Cross-border exchange from the result databases (`inputs/`)
+The fixed exchange with non-modelled neighbours is **computed on the fly** from
+the crossborder-flow databases in `inputs/` (`crossborder_electricity_2030.parquet`,
+`crossborder_hydrogen_2030.parquet`, `smr_production_2030.parquet`), so the
+in/out-of-scope split follows the **actual zone selection** — change `--zones`
+and each border is reclassified as an internal optimised line (both endpoints
+selected) or a fixed external exchange (neighbour outside the selection).
+Hydrogen is resolved at country level, with `IB*` interconnector hubs and Steam-
+Methane-Reformer output folded in, attached to each country's main zone. The
+method is specified in [`inputs/EXPORTS_CALCULATION.md`](inputs/EXPORTS_CALCULATION.md).
+Set `exports_from_db=False` (or remove the databases) to fall back to the
+pre-baked `Exports_*` / `H2Exports_*` Excel columns, which assume a fixed
+selection.
+
 ## Key assumptions (all tunable in `economic_dispatch/config.py`)
 
 - **Marginal cost** = `VOM Price + Fuel + CO2Factor·CO2Price`.
@@ -161,9 +175,11 @@ economic_dispatch/
   data_loader.py     parse a zone workbook + technology classification
   network_loader.py  parse Networks.xlsx
   model.py           build the linopy MILP
+  exports_loader.py  compute cross-border exchange from the inputs/ databases
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
+inputs/              crossborder result databases (parquet) + EXPORTS_CALCULATION.md
 outputs/             results CSVs (generation, flows, storage, shedding, summary,
                      hourly per-tech balance)
 outputs/inputs/      per-node input data as the model resolved it (see below)

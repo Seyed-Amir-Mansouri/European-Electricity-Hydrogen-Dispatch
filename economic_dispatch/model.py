@@ -16,6 +16,7 @@ needed by report.py to extract and validate the solution.
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import linopy
@@ -25,6 +26,7 @@ import xarray as xr
 
 from .config import RunConfig
 from . import data_loader as dl
+from . import exports_loader
 from .data_loader import ZoneData
 from .network_loader import NetworkData, Line
 
@@ -335,8 +337,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     # ---- demand / fixed exchange ---------------------------------------- #
     demand_e = _profile_da(zdata, zones, hours, "Electricity Demand Profile")
     demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile")
-    external_e = _external_exchange(zdata, zones, hours, "Exports")
-    external_h2 = _external_exchange(zdata, zones, hours, "H2Exports")
+    external_e, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
@@ -432,6 +433,38 @@ def _external_exchange(zdata, zones, hours, prefix) -> xr.DataArray:
         rows.append(-s)  # net injection: import (+), export (-)
     return xr.DataArray(np.vstack(rows), coords={ZONE: pd.Index(zones, name=ZONE), HOUR: hours},
                         dims=[ZONE, HOUR])
+
+
+def _h2_main_zones(zdata, zones) -> dict[str, str]:
+    """Main H2 zone per country = the country's selected zone with the most H2 demand."""
+    best: dict[str, str] = {}
+    dem: dict[str, float] = {}
+    for z in zones:
+        prof = zdata[z].profiles
+        d = float(_num(prof["Hydrogen Demand Profile"].to_numpy()).sum()) \
+            if "Hydrogen Demand Profile" in prof else 0.0
+        c = z[:2]
+        if c not in best or d > dem[c]:
+            best[c], dem[c] = z, d
+    return best
+
+
+def _external_exchange_all(zdata, zones, hours, cfg):
+    """Return (external_e, external_h2) net-injection arrays (import +).
+
+    Computed from the ``inputs/`` result databases so neighbours track the zone
+    selection; falls back to the Excel ``Exports_*`` columns if the databases are
+    missing or ``exports_from_db`` is off.
+    """
+    if cfg.exports_from_db:
+        try:
+            main_map = _h2_main_zones(zdata, zones)
+            return exports_loader.load_external_injection(cfg, zones, hours, main_map)
+        except FileNotFoundError:
+            warnings.warn("exports databases not found in inputs/; falling back to "
+                          "Excel Exports_* / H2Exports_* columns")
+    return (_external_exchange(zdata, zones, hours, "Exports"),
+            _external_exchange(zdata, zones, hours, "H2Exports"))
 
 
 def _flow_terms(m: linopy.Model, lines: list[Line], zones: list[str], hours: pd.Index, tag: str):
