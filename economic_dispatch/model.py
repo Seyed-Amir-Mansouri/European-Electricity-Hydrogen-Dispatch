@@ -180,37 +180,43 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
             return np.clip(_num(prof[name].to_numpy()), 0.0, None) if name in prof else zero
 
         specs = [
-            # kind, pdis, pchg, ecap, inflow, eff
+            # kind, pdis, pchg, ecap, inflow, eff, carrier
             ("Battery",
              zd.char_val("Battery (MWh)", "Net maximum capacity - generation perspective (MW)"),
              zd.char_val("Battery (MWh)", "Net maximum capacity - demand perspective (MW)"),
              e.get("Battery (MWh)", 0.0), zero,
-             max(zd.char_val("Battery (MWh)", "Efficiency (%)", 92.0) / 100.0, 0.1)),
+             max(zd.char_val("Battery (MWh)", "Efficiency (%)", 92.0) / 100.0, 0.1), "electricity"),
             ("Hydro reservoir", cap.get("Hydro (reservoir) (MW)", 0.0), 0.0,
              e.get("Hydro (reservoir) (MWh)", 0.0), col("Reservoir Flow Energy"),
-             cfg.default_hydro_efficiency),
+             cfg.default_hydro_efficiency, "electricity"),
             ("Hydro pondage", cap.get("Hydro (pondage) (MW)", 0.0), 0.0,
              e.get("Hydro (pondage) (MWh)", 0.0), col("Pondage Flow Energy"),
-             cfg.default_hydro_efficiency),
+             cfg.default_hydro_efficiency, "electricity"),
             ("Hydro open_ps", cap.get("Hydro (open_ps_turbine) (MW)", 0.0),
              abs(cap.get("Hydro (open_ps_pump) (MW)", 0.0)),
              e.get("Hydro (open_ps) (MWh)", 0.0), col("Open_PS Flow Energy"),
-             cfg.default_pump_efficiency),
+             cfg.default_pump_efficiency, "electricity"),
             ("Hydro closed_ps", cap.get("Hydro (closed_ps_turbine) (MW)", 0.0),
              abs(cap.get("Hydro (closed_ps_pump) (MW)", 0.0)),
              e.get("Hydro (closed_ps) (MWh)", 0.0), col("Closed_PS Flow Energy"),
-             cfg.default_pump_efficiency),
+             cfg.default_pump_efficiency, "electricity"),
         ]
-        for kind, pdis, pchg, ecap, inf, eff in specs:
+        if cfg.enable_h2_storage:
+            wd = zd.gas_h2.get("Withdraw (Hydrogen) (MW)", 0.0)      # discharge power
+            inj = zd.gas_h2.get("Injection (Hydrogen) (MW)", 0.0)   # charge power
+            specs.append(("H2 storage", wd, inj, wd * cfg.h2_storage_hours, zero,
+                          cfg.h2_storage_efficiency, "hydrogen"))
+        for kind, pdis, pchg, ecap, inf, eff, carrier in specs:
             if ecap <= 0 or pdis <= 0:
                 continue
             sid = f"{z}|{kind}"
             rows.append(dict(sto=sid, zone=z, kind=kind, pdis=float(pdis),
-                             pchg=float(pchg), ecap=float(ecap), eff=float(eff)))
+                             pchg=float(pchg), ecap=float(ecap), eff=float(eff),
+                             carrier=carrier))
             inflow[sid] = inf
 
     storage = pd.DataFrame(rows).set_index("sto") if rows else pd.DataFrame(
-        columns=["zone", "kind", "pdis", "pchg", "ecap", "eff"]).rename_axis("sto")
+        columns=["zone", "kind", "pdis", "pchg", "ecap", "eff", "carrier"]).rename_axis("sto")
     return storage, inflow
 
 
@@ -276,8 +282,14 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
         spill = m.add_variables(lower=0.0, name="spill", coords=[sidx, hours])
 
         A_sto = _incidence(storage["zone"], zones, STO)
-        dis_by_zone = (A_sto * dis).sum(STO)
-        ch_by_zone = (A_sto * ch).sum(STO)
+        # Route each device's charge/discharge to its carrier's balance.
+        carr = storage["carrier"].to_numpy()
+        mask_e = xr.DataArray((carr == "electricity").astype(float), coords={STO: sidx}, dims=[STO])
+        mask_h = xr.DataArray((carr == "hydrogen").astype(float), coords={STO: sidx}, dims=[STO])
+        dis_by_zone = (A_sto * mask_e * dis).sum(STO)
+        ch_by_zone = (A_sto * mask_e * ch).sum(STO)
+        dis_h2_by_zone = (A_sto * mask_h * dis).sum(STO)
+        ch_h2_by_zone = (A_sto * mask_h * ch).sum(STO)
 
         soc_init = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
         inflow_mat = np.vstack([sinflow[s] for s in sidx])
@@ -295,6 +307,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
             m.add_constraints(soc.sel({HOUR: H - 1}) == end, name="soc_cyclic")
     else:
         dis_by_zone = ch_by_zone = 0.0
+        dis_h2_by_zone = ch_h2_by_zone = 0.0
 
     # ---- electrolysers & H2 terminals ----------------------------------- #
     ely_cap = np.array([zdata[z].capacities.get("Electrolyser (MW)", 0.0) for z in zones])
@@ -339,7 +352,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
                 + external_e + shed_e - dump_e)
     m.add_constraints(elec_lhs == demand_e, name="elec_balance")
 
-    h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2 + shed_h
+    h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2
+              + dis_h2_by_zone - ch_h2_by_zone + shed_h
               - h2_cons_by_zone - dump_h)
     m.add_constraints(h2_lhs == demand_h, name="h2_balance")
 

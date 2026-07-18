@@ -73,7 +73,8 @@ hour, subject to unit commitment, storage, ramps, and inter-zone transport.
 - **Continuous dispatch** of variable renewables (curtailable), run-of-river
   hydro, and `Other RES` / `Other Non-RES` / `DSR` (capped by hourly profile).
 - **Storage** charge / discharge / state-of-charge for batteries and hydro
-  reservoir & pumped-storage (with natural inflows).
+  reservoir & pumped-storage on the electricity side (with natural inflows), and
+  **hydrogen storage** on the H2 side.
 - **Electrolysers** convert electricity → hydrogen; **hydrogen-fired plants**
   convert hydrogen → electricity — the two couplers between the carriers.
 - **Network flows** on the electricity and hydrogen transport grids.
@@ -131,8 +132,10 @@ MW limits + loss fractions) and global CO2 & gas prices.
   (cyclic); round-trip efficiency applied on charging.
 - **Hydrogen terminal imports** are allowed at `h2_terminal_price` (default
   150 EUR/MWh, an assumption) up to the `Terminal (Hydrogen)` capacity.
-- **No standalone hydrogen storage reservoir** by default (the data gives H2
-  injection/withdrawal power but no clear energy capacity).
+- **Hydrogen storage** (`enable_h2_storage`) uses `Withdraw`/`Injection
+  (Hydrogen)` as discharge/charge power. The data gives no energy value, so its
+  capacity is an **assumption**: `h2_storage_hours × Withdraw (Hydrogen)`
+  (default 168 h), round-trip efficiency `h2_storage_efficiency` (default 1.0).
 
 > **Note on hydrogen shedding:** with the electrolyser capacities in the data,
 > modelled hydrogen supply (electrolysis + terminal imports + pipelines) can be
@@ -175,7 +178,7 @@ Every run writes two wide CSVs modelled on the MMStandardOutputFile
 | File | Per-zone categories |
 |------|---------------------|
 | `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Dumped/curtailed, Demand |
-| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, Dumped/curtailed, H2 plant consumption, Demand |
+| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, H2 storage discharge / charge, Load shedding, Dumped/curtailed, H2 plant consumption, Demand |
 
 Signs are chosen so supply is `+` and consumption `-`, so each row sums to ~0
 (the nodal balance holds).

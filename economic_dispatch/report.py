@@ -71,6 +71,27 @@ def _zone_sum(df: pd.DataFrame, zones: list[str], H: int) -> pd.DataFrame:
     return grp.reindex(zones).fillna(0.0)
 
 
+def _sto_ids(build: BuildResult, carrier: str):
+    """Storage device ids for a carrier ('electricity' / 'hydrogen')."""
+    st = build.storage
+    if st.empty or "carrier" not in st.columns:
+        return None
+    return list(st.index[st["carrier"] == carrier])
+
+
+def _zone_sum_carrier(df: pd.DataFrame, zones: list[str], H: int, ids) -> pd.DataFrame:
+    """Like _zone_sum but summing only the storage ids in ``ids``."""
+    if df.empty:
+        return pd.DataFrame(0.0, index=zones, columns=range(H))
+    df = _ids_on_rows(df)
+    if ids is not None:
+        df = df.loc[df.index.intersection(ids)]
+    if df.empty:
+        return pd.DataFrame(0.0, index=zones, columns=range(H))
+    grp = df.groupby(lambda gid: str(gid).split("|", 1)[0]).sum()
+    return grp.reindex(zones).fillna(0.0)
+
+
 def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     """Recompute elec & H2 balances from the solution; return max residuals."""
     z = build.zones
@@ -83,9 +104,12 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
             return pd.DataFrame(0.0, index=z, columns=range(H))
         return _zones_on_rows(df, z).reindex(z).fillna(0.0)
 
+    eids, hids = _sto_ids(build, "electricity"), _sto_ids(build, "hydrogen")
     gen_z = _zone_sum(sol["gen_p"], z, H)
-    dis_z = _zone_sum(sol["dis"], z, H)
-    ch_z = _zone_sum(sol["ch"], z, H)
+    dis_z = _zone_sum_carrier(sol["dis"], z, H, eids)
+    ch_z = _zone_sum_carrier(sol["ch"], z, H, eids)
+    dis_h2_z = _zone_sum_carrier(sol["dis"], z, H, hids)
+    ch_h2_z = _zone_sum_carrier(sol["ch"], z, H, hids)
     ely = zrows("ely_p")
     term = zrows("term_h2")
     shed_e = zrows("shed_e")
@@ -115,7 +139,8 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
 
     # Hydrogen residual
     ely_prod = _ely_production(build, sol)
-    res_h = (ely_prod + term + net_h + shed_h + external_h2 - dump_h - demand_h - h2_cons)
+    res_h = (ely_prod + term + net_h + shed_h + external_h2 + dis_h2_z - ch_h2_z
+             - dump_h - demand_h - h2_cons)
     max_h = float(np.abs(res_h.to_numpy()).max()) if res_h.size else 0.0
 
     return {"max_elec_residual": max_e, "max_h2_residual": max_h, "tol": tol}
@@ -252,7 +277,11 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
         return _zones_on_rows(da.to_pandas(), z).reindex(z).fillna(0.0)
 
     gp = _ids_on_rows(sol["gen_p"]) if not sol["gen_p"].empty else pd.DataFrame()
-    dis_z, ch_z = _zone_sum(sol["dis"], z, H), _zone_sum(sol["ch"], z, H)
+    eids, hids = _sto_ids(build, "electricity"), _sto_ids(build, "hydrogen")
+    dis_z = _zone_sum_carrier(sol["dis"], z, H, eids)
+    ch_z = _zone_sum_carrier(sol["ch"], z, H, eids)
+    dis_h2_z = _zone_sum_carrier(sol["dis"], z, H, hids)
+    ch_h2_z = _zone_sum_carrier(sol["ch"], z, H, hids)
     ely, term = zrows("ely_p"), zrows("term_h2")
     shed_e, shed_h = zrows("shed_e"), zrows("shed_h")
     dmp_e, dmp_h = zrows("dump_e"), zrows("dump_h")
@@ -304,6 +333,8 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("Terminal import", term.loc[zone]),
             ("Net pipeline import", net_h.loc[zone]),
             ("External exchange", ext_h.loc[zone]),
+            ("H2 storage discharge", dis_h2_z.loc[zone]),
+            ("H2 storage charge (-)", -ch_h2_z.loc[zone]),
             ("Load shedding", shed_h.loc[zone]),
             ("Dumped/curtailed (-)", -dmp_h.loc[zone]),
             ("H2 plant consumption (-)", -h2_cons.loc[zone]),

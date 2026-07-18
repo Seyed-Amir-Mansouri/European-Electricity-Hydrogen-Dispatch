@@ -67,6 +67,7 @@ class RunConfig:
     enable_ramps: bool = True          # generator ramp-rate limits
     enable_reserves: bool = False      # FCR/FRR headroom constraints (off by default)
     enable_h2_terminal: bool = True    # allow external H2 supply at import terminals
+    enable_h2_storage: bool = True     # model H2 storage (Injection/Withdraw Hydrogen power)
     cyclic_storage: bool = True        # end-of-day SoC must return to initial SoC
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
@@ -87,6 +88,10 @@ class RunConfig:
     initial_soc_fraction: float = 0.5  # storage state of charge at hour 0
     ramp_scale: float = 1.0            # multiplier on ramp-rate column
     default_pump_efficiency: float = 0.8   # round-trip eff for pumped hydro if missing
+    # H2 storage energy capacity (MWh) = Withdraw (Hydrogen) power x h2_storage_hours.
+    # ASSUMPTION: the data gives only injection/withdrawal power, no energy capacity.
+    h2_storage_hours: float = 168.0
+    h2_storage_efficiency: float = 1.0     # H2 storage round-trip efficiency (ASSUMPTION)
     default_hydro_efficiency: float = 1.0  # reservoir/pondage (water, no conversion loss)
 
     # --- Solver ------------------------------------------------------------
