@@ -72,10 +72,10 @@ def _marginal_cost(zd: ZoneData, tech: str, h2_fuel: bool, co2_price: float,
         # charge the exogenous H2 fuel price, or it would be double counted.
         return vom
     eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
-    if cfg.fuel_per_thermal:
-        e = eff if eff > 0 else cfg.default_efficiency
-        return vom + fuel / e + (co2f / e) * co2_price
-    return vom + fuel + co2f * co2_price
+    e = eff if eff > 0 else cfg.default_efficiency
+    fuel_term = fuel / e if cfg.fuel_per_thermal else fuel
+    co2_term = (co2f / e if cfg.co2_per_thermal else co2f) * co2_price
+    return vom + fuel_term + co2_term
 
 
 def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig):

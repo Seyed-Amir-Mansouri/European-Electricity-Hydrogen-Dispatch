@@ -70,10 +70,14 @@ class RunConfig:
     cyclic_storage: bool = True        # end-of-day SoC must return to initial SoC
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
-    # Marginal cost = VOM Price + fuel_term + co2_term.
-    # If fuel_per_thermal: fuel_term = Fuel / eff, co2_term = CO2Factor / eff * CO2Price
-    # (Fuel/CO2 are per MWh_thermal). Otherwise they are taken as per MWh_elec.
-    fuel_per_thermal: bool = True
+    # Marginal cost = VOM Price + fuel_term + co2_term, where
+    #   fuel_term = Fuel / eff  if fuel_per_thermal else Fuel
+    #   co2_term  = (CO2Factor / eff if co2_per_thermal else CO2Factor) * CO2Price
+    # The data's Fuel column is already per MWh_elec (divided by eff upstream),
+    # so fuel_per_thermal defaults to False. CO2Factor is per MWh_thermal, so it
+    # is divided by eff (co2_per_thermal=True).
+    fuel_per_thermal: bool = False
+    co2_per_thermal: bool = True
     default_efficiency: float = 0.5    # fallback when Efficiency is 0/missing
     voll_eur_per_mwh: float = 10_000.0  # value of lost load (elec & H2 shedding penalty)
     h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)

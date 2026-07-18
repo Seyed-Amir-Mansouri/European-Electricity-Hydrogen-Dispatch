@@ -111,10 +111,12 @@ MW limits + loss fractions) and global CO2 & gas prices.
 
 ## Key assumptions (all tunable in `economic_dispatch/config.py`)
 
-- **Marginal cost** = `VOM Price + Fuel/efficiency + (CO2Factor/efficiency)·CO2Price`.
-  Fuel and CO2 factors are treated as **per MWh-thermal** (the Fuel value is
-  constant across efficiencies for a given fuel), so they are divided by
-  efficiency. Set `fuel_per_thermal=False` for the simple additive form.
+- **Marginal cost** = `VOM Price + Fuel + (CO2Factor/efficiency)·CO2Price`.
+  In this dataset the **Fuel** column is already per MWh-elec (divided by an
+  efficiency upstream — it is constant across plants of differing efficiency), so
+  it is used as-is (`fuel_per_thermal=False`). The **CO2Factor** is per
+  MWh-thermal, so it is divided by efficiency (`co2_per_thermal=True`). Both
+  divisions are independently switchable in `config.py`.
 - **Hydrogen-fired plants pay no exogenous fuel cost** — their hydrogen is
   supplied by the hydrogen balance (electrolysers/terminals), which already
   carries the cost. Charging the 63.5 EUR/MWh H2 fuel price too would double count.
