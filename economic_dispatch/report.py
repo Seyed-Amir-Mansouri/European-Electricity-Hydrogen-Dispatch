@@ -92,6 +92,7 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     demand_e = _zones_on_rows(build.demand_e.to_pandas(), z).reindex(z)
     demand_h = _zones_on_rows(build.demand_h.to_pandas(), z).reindex(z)
     external_e = _zones_on_rows(build.external_e.to_pandas(), z).reindex(z)
+    external_h2 = _zones_on_rows(build.external_h2.to_pandas(), z).reindex(z)
 
     # H2 consumption by H2-fired plants
     h2 = build.gens[build.gens["h2_fuel"]]
@@ -108,9 +109,9 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     res_e = (gen_z + dis_z - ch_z - ely + net_e + external_e + shed_e - demand_e)
     max_e = float(np.abs(res_e.to_numpy()).max()) if res_e.size else 0.0
 
-    # Hydrogen residual: ely_prod + term + net_h + shed_h - demand_h - h2_cons
+    # Hydrogen residual: ely_prod + term + net_h + shed_h - h2_cons == demand_h - external_h2
     ely_prod = _ely_production(build, sol)
-    res_h = (ely_prod + term + net_h + shed_h - demand_h - h2_cons)
+    res_h = (ely_prod + term + net_h + shed_h + external_h2 - demand_h - h2_cons)
     max_h = float(np.abs(res_h.to_numpy()).max()) if res_h.size else 0.0
 
     return {"max_elec_residual": max_e, "max_h2_residual": max_h, "tol": tol}
@@ -267,6 +268,7 @@ def write_inputs(build: BuildResult, out_dir: Path) -> None:
     summ["elec_demand_mwh"] = demand_sum(build.demand_e)
     summ["h2_demand_mwh"] = demand_sum(build.demand_h)
     summ["ext_exchange_mwh"] = demand_sum(build.external_e)
+    summ["h2_ext_exchange_mwh"] = demand_sum(build.external_h2)
     summ["committable_cap_mw"] = cap_by(dl.CAT_COMMIT)
     summ["vres_cap_mw"] = cap_by(dl.CAT_VRES)
     summ["ror_cap_mw"] = cap_by(dl.CAT_ROR)

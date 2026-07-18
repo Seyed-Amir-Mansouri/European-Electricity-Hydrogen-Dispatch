@@ -54,7 +54,8 @@ class BuildResult:
     gen_upper: xr.DataArray     # (gen, hour) available capacity
     demand_e: xr.DataArray      # (zone, hour)
     demand_h: xr.DataArray
-    external_e: xr.DataArray
+    external_e: xr.DataArray    # fixed electricity exchange with non-modelled zones
+    external_h2: xr.DataArray   # fixed hydrogen exchange with non-modelled zones
     elines: list[Line]
     hlines: list[Line]
     net: NetworkData
@@ -321,7 +322,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     # ---- demand / fixed exchange ---------------------------------------- #
     demand_e = _profile_da(zdata, zones, hours, "Electricity Demand Profile")
     demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile")
-    external_e = _external_exchange(zdata, zones, hours)
+    external_e = _external_exchange(zdata, zones, hours, "Exports")
+    external_h2 = _external_exchange(zdata, zones, hours, "H2Exports")
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
@@ -331,7 +333,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     m.add_constraints(elec_lhs == demand_e - external_e, name="elec_balance")
 
     h2_lhs = ely_eff_da * ely_p + term_h2 + net_h + shed_h - h2_cons_by_zone
-    m.add_constraints(h2_lhs == demand_h, name="h2_balance")
+    m.add_constraints(h2_lhs == demand_h - external_h2, name="h2_balance")
 
     # ---- ramps ----------------------------------------------------------- #
     if cfg.enable_ramps and len(commit) > 0:
@@ -357,7 +359,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     m.add_objective(obj)
 
     br = BuildResult(m, cfg, zones, hours, gens, commit, storage, gen_upper,
-                     demand_e, demand_h, external_e, net.elec, net.hydrogen, net)
+                     demand_e, demand_h, external_e, external_h2, net.elec, net.hydrogen, net)
     br._ely_eff = pd.Series(ely_eff, index=zones)  # for exact H2-balance validation
     br._ely_cap = pd.Series(ely_cap, index=zones)      # electrolyser power capacity (MW)
     br._term_cap = pd.Series(term_cap, index=zones)    # H2 terminal import capacity (MW, as used)
@@ -384,12 +386,18 @@ def _profile_da(zdata, zones, hours, col) -> xr.DataArray:
                         dims=[ZONE, HOUR])
 
 
-def _external_exchange(zdata, zones, hours) -> xr.DataArray:
-    """Net fixed exchange with non-modelled neighbours (native sign: <0 = export)."""
+def _external_exchange(zdata, zones, hours, prefix) -> xr.DataArray:
+    """Net fixed exchange with non-modelled neighbours (native sign: <0 = export).
+
+    Sums every profile column starting with ``prefix`` per zone:
+      * "Exports"   -> electricity exchange (e.g. Exports_AT00_CH00)
+      * "H2Exports" -> hydrogen exchange   (e.g. H2Exports_AT00_IT00, H2Exports_DE00)
+    Note "H2Exports" does not start with "Exports", so the two never collide.
+    """
     rows = []
     for z in zones:
         prof = zdata[z].profiles
-        cols = [c for c in prof.columns if isinstance(c, str) and c.startswith("Exports")]
+        cols = [c for c in prof.columns if isinstance(c, str) and c.startswith(prefix)]
         s = np.zeros(len(hours))
         for c in cols:
             s = s + _num(prof[c].to_numpy())

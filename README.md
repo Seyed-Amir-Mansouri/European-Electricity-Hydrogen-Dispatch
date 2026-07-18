@@ -84,10 +84,11 @@ hour, subject to unit commitment, storage, ramps, and inter-zone transport.
 ### The two coupled balances (per zone, per hour)
 ```
 ELEC:  committable gen + RES + hydro + storage discharge + H2-plant gen
-       + net line imports (after losses) + fixed external exchange + shed_e
+       + net line imports (after losses) + fixed external elec exchange + shed_e
      = demand + storage charge + electrolyser draw
 HYDROGEN:
-       electrolyser output + terminal imports + net H2 line imports + shed_h
+       electrolyser output + terminal imports + net H2 line imports
+       + fixed external H2 exchange + shed_h
      = H2 demand + H2-plant fuel use (gen / efficiency)
 ```
 
@@ -98,7 +99,7 @@ HYDROGEN:
 | Technology Capacities | installed MW per technology |
 | Storage Capacities | storage energy (MWh) |
 | Reserve Requirements | FCR/FRR (only with `--reserves`) |
-| Hourly Profiles | demand, RES capacity factors / MW, hydro inflows, external exchange |
+| Hourly Profiles | demand, RES capacity factors / MW, hydro inflows, external elec (`Exports_*`) & H2 (`H2Exports_*`) exchange |
 | Technology Characteristics | units, min stable power, ramps, efficiency, CO2 factor, prices, must-run |
 | Gas & Hydrogen Assets | hydrogen terminal / storage capacities |
 
