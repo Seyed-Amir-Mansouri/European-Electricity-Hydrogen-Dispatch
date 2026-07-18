@@ -184,9 +184,15 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     # Clean slate: remove CSVs from any previous run so the folder reflects
     # exactly this run (some files are only written when their variable is
-    # non-empty, so stale files would otherwise linger).
+    # non-empty, so stale files would otherwise linger). Skip files locked by
+    # another process (e.g. open in Excel or mid-sync on Google Drive) rather
+    # than aborting the whole output step.
     for old in out_dir.glob("*.csv"):
-        old.unlink()
+        try:
+            old.unlink()
+        except OSError as e:
+            print(f"  warning: could not remove {old.name} ({e.strerror}); "
+                  f"close it if open in another program")
     sol = extract(build)
 
     # Generation by technology (long form): zone, tech, hour, MW
@@ -220,8 +226,8 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
 
     Two wide CSVs with a two-level column header ``(zone, category)`` and one row
     per hour, in the spirit of the MMStandardOutputFile 'Hourly Market Data' /
-    'Hourly H2 Data' sheets. Signs are chosen so that every column sums into a
-    final ``Balance`` column that is ~0 each hour (supply +, consumption -).
+    'Hourly H2 Data' sheets. Signs are chosen so supply is + and consumption -,
+    so each row sums to ~0 (the nodal balance holds).
     """
     out_dir = Path(out_dir)
     z = build.zones
@@ -279,8 +285,6 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("Load shedding", shed_e.loc[zone]),
             ("Demand (-)", -dem_e.loc[zone]),
         ]
-        total = sum(np.asarray(s, float) for _, s in out)
-        out.append(("Balance", total))
         return out
 
     # ---- hydrogen ----
@@ -294,8 +298,6 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("H2 plant consumption (-)", -h2_cons.loc[zone]),
             ("Demand (-)", -dem_h.loc[zone]),
         ]
-        total = sum(np.asarray(s, float) for _, s in out)
-        out.append(("Balance", total))
         return out
 
     build_table(elec_cols).to_csv(out_dir / "hourly_balance_elec.csv")

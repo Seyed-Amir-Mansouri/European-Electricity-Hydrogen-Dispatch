@@ -171,11 +171,11 @@ Every run writes two wide CSVs modelled on the MMStandardOutputFile
 
 | File | Per-zone categories |
 |------|---------------------|
-| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Demand, and **Balance** |
-| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, H2 plant consumption, Demand, and **Balance** |
+| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Demand |
+| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, H2 plant consumption, Demand |
 
-Signs are chosen so supply is `+` and consumption `-`; the final **Balance**
-column sums to ~0 each hour (a built-in per-zone, per-hour balance check).
+Signs are chosen so supply is `+` and consumption `-`, so each row sums to ~0
+(the nodal balance holds).
 
 ## Exported node data
 
