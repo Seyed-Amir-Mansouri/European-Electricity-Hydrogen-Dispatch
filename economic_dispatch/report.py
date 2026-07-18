@@ -212,6 +212,94 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
             net.to_csv(out_dir / f"flows_{'elec' if tag == 'e' else 'h2'}.csv")
 
     pd.Series(summary(build)).to_csv(out_dir / "summary.csv")
+    write_hourly_balance(build, out_dir)
+
+
+def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
+    """Write PLEXOS-style hourly per-technology balances (elec & H2).
+
+    Two wide CSVs with a two-level column header ``(zone, category)`` and one row
+    per hour, in the spirit of the MMStandardOutputFile 'Hourly Market Data' /
+    'Hourly H2 Data' sheets. Signs are chosen so that every column sums into a
+    final ``Balance`` column that is ~0 each hour (supply +, consumption -).
+    """
+    out_dir = Path(out_dir)
+    z = build.zones
+    H = len(build.hours)
+    sol = extract(build)
+
+    def zrows(name):
+        df = sol[name]
+        if df.empty:
+            return pd.DataFrame(0.0, index=z, columns=range(H))
+        return _zones_on_rows(df, z).reindex(z).fillna(0.0)
+
+    def da_rows(da):
+        return _zones_on_rows(da.to_pandas(), z).reindex(z).fillna(0.0)
+
+    gp = _ids_on_rows(sol["gen_p"]) if not sol["gen_p"].empty else pd.DataFrame()
+    dis_z, ch_z = _zone_sum(sol["dis"], z, H), _zone_sum(sol["ch"], z, H)
+    ely, term = zrows("ely_p"), zrows("term_h2")
+    shed_e, shed_h = zrows("shed_e"), zrows("shed_h")
+    net_e, net_h = _net_import_from_solution(build, "e"), _net_import_from_solution(build, "h")
+    dem_e, dem_h = da_rows(build.demand_e), da_rows(build.demand_h)
+    ext_e, ext_h = da_rows(build.external_e), da_rows(build.external_h2)
+    ely_prod = _ely_production(build, sol)
+
+    # H2 consumed by H2-fired plants, per zone
+    h2 = build.gens[build.gens["h2_fuel"]]
+    h2_cons = pd.DataFrame(0.0, index=z, columns=range(H))
+    if not h2.empty and not gp.empty:
+        for gid, row in h2.iterrows():
+            if gid in gp.index:
+                h2_cons.loc[row["zone"]] += gp.loc[gid].to_numpy() / row["eff"]
+
+    def build_table(per_zone_cols):
+        data = {}
+        for zone in z:
+            for cat, series in per_zone_cols(zone):
+                data[(zone, cat)] = np.asarray(series, dtype=float)
+        df = pd.DataFrame(data, index=pd.Index(range(H), name="hour"))
+        df.columns = pd.MultiIndex.from_tuples(df.columns, names=["zone", "category"])
+        return df.round(3)
+
+    # ---- electricity ----
+    def elec_cols(zone):
+        out = []
+        if not gp.empty:
+            for gid in gp.index:
+                if gid.split("|", 1)[0] == zone:
+                    out.append((gid.split("|", 1)[1], gp.loc[gid].to_numpy()))
+        out += [
+            ("Storage discharge", dis_z.loc[zone]),
+            ("Storage charge (-)", -ch_z.loc[zone]),
+            ("Electrolyser load (-)", -ely.loc[zone]),
+            ("Net line import", net_e.loc[zone]),
+            ("External exchange", ext_e.loc[zone]),
+            ("Load shedding", shed_e.loc[zone]),
+            ("Demand (-)", -dem_e.loc[zone]),
+        ]
+        total = sum(np.asarray(s, float) for _, s in out)
+        out.append(("Balance", total))
+        return out
+
+    # ---- hydrogen ----
+    def h2_cols(zone):
+        out = [
+            ("Electrolyser production", ely_prod.loc[zone]),
+            ("Terminal import", term.loc[zone]),
+            ("Net pipeline import", net_h.loc[zone]),
+            ("External exchange", ext_h.loc[zone]),
+            ("Load shedding", shed_h.loc[zone]),
+            ("H2 plant consumption (-)", -h2_cons.loc[zone]),
+            ("Demand (-)", -dem_h.loc[zone]),
+        ]
+        total = sum(np.asarray(s, float) for _, s in out)
+        out.append(("Balance", total))
+        return out
+
+    build_table(elec_cols).to_csv(out_dir / "hourly_balance_elec.csv")
+    build_table(h2_cols).to_csv(out_dir / "hourly_balance_h2.csv")
 
 
 def write_inputs(build: BuildResult, out_dir: Path) -> None:

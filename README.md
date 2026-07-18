@@ -158,9 +158,24 @@ economic_dispatch/
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
-outputs/             results CSVs (generation, flows, storage, shedding, summary)
+outputs/             results CSVs (generation, flows, storage, shedding, summary,
+                     hourly per-tech balance)
 outputs/inputs/      per-node input data as the model resolved it (see below)
 ```
+
+## Hourly per-technology balance (PLEXOS-style)
+
+Every run writes two wide CSVs modelled on the MMStandardOutputFile
+`Hourly Market Data` / `Hourly H2 Data` sheets — a two-level column header
+`(zone, category)` with one row per hour:
+
+| File | Per-zone categories |
+|------|---------------------|
+| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Demand, and **Balance** |
+| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, H2 plant consumption, Demand, and **Balance** |
+
+Signs are chosen so supply is `+` and consumption `-`; the final **Balance**
+column sums to ~0 each hour (a built-in per-zone, per-hour balance check).
 
 ## Exported node data
 

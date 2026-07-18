@@ -6,6 +6,7 @@ README and are the ones to revisit if results look off.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,18 +29,26 @@ HOURS_PER_DAY = 24
 HOURS_PER_YEAR = 8736  # 364 days * 24
 
 
-def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
-    """Zone codes = every ``*.xlsx`` in ``data_dir`` except ``Networks.xlsx``.
+# A zone code is a 2-letter country prefix + 2-3 alphanumeric subzone id
+# (e.g. AT00, BEOF, DE00, NL6H, PL00E). This deliberately excludes Networks.xlsx,
+# the PLEXOS MMStandardOutputFile, and any other non-zone workbook that may sit
+# in the data folder.
+_ZONE_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,3}$")
 
-    Returns them sorted for reproducibility. Excel lock files (``~$*``) and the
-    networks workbook are skipped. Empty list if the folder can't be read.
+
+def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
+    """Zone codes = every ``*.xlsx`` in ``data_dir`` whose name matches a zone code.
+
+    Returns them sorted for reproducibility. Excel lock files (``~$*``),
+    ``Networks.xlsx``, and any non-zone workbook are skipped. Empty list if the
+    folder can't be read.
     """
     data_dir = Path(data_dir)
     if not data_dir.is_dir():
         return []
     return sorted(
         p.stem for p in data_dir.glob("*.xlsx")
-        if p.stem.lower() != "networks" and not p.name.startswith("~$")
+        if _ZONE_RE.match(p.stem) and not p.name.startswith("~$")
     )
 
 
