@@ -73,11 +73,11 @@ class RunConfig:
     # Marginal cost = VOM Price + fuel_term + co2_term, where
     #   fuel_term = Fuel / eff  if fuel_per_thermal else Fuel
     #   co2_term  = (CO2Factor / eff if co2_per_thermal else CO2Factor) * CO2Price
-    # The data's Fuel column is already per MWh_elec (divided by eff upstream),
-    # so fuel_per_thermal defaults to False. CO2Factor is per MWh_thermal, so it
-    # is divided by eff (co2_per_thermal=True).
+    # Both the Fuel and CO2Factor columns are already per MWh_elec (per power
+    # generation), so neither is divided by efficiency. Flip a flag to True only
+    # if the corresponding column is provided per MWh_thermal instead.
     fuel_per_thermal: bool = False
-    co2_per_thermal: bool = True
+    co2_per_thermal: bool = False
     default_efficiency: float = 0.5    # fallback when Efficiency is 0/missing
     voll_eur_per_mwh: float = 10_000.0  # value of lost load (elec & H2 shedding penalty)
     h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)
