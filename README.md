@@ -84,12 +84,15 @@ hour, subject to unit commitment, storage, ramps, and inter-zone transport.
 ### The two coupled balances (per zone, per hour)
 ```
 ELEC:  committable gen + RES + hydro + storage discharge + H2-plant gen
-       + net line imports (after losses) + fixed external elec exchange + shed_e
+       + net line imports (after losses) + net external elec import + shed_e
      = demand + storage charge + electrolyser draw
 HYDROGEN:
        electrolyser output + terminal imports + net H2 line imports
-       + fixed external H2 exchange + shed_h
+       + net external H2 import + shed_h
      = H2 demand + H2-plant fuel use (gen / efficiency)
+
+(Net external import = -(sum of Exports_*/H2Exports_* columns), since those
+columns use positive = export; a negative column value is an inflow = supply.)
 ```
 
 ## Data model (per zone workbook)
@@ -171,8 +174,8 @@ Every run writes two wide CSVs modelled on the MMStandardOutputFile
 
 | File | Per-zone categories |
 |------|---------------------|
-| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Demand |
-| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, H2 plant consumption, Demand |
+| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Dumped/curtailed, Demand |
+| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, Load shedding, Dumped/curtailed, H2 plant consumption, Demand |
 
 Signs are chosen so supply is `+` and consumption `-`, so each row sums to ~0
 (the nodal balance holds).

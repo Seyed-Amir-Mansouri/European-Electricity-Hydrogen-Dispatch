@@ -327,13 +327,21 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
+    # Dump/curtailment slacks absorb EXCESS supply (e.g. a fixed net import that
+    # exceeds absorbable load) — the counterpart of shedding, as in PLEXOS's
+    # "Dumped" category. Without them the equality balance can be infeasible.
+    dump_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="dump_e")
+    dump_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="dump_h")
 
     # ---- balances -------------------------------------------------------- #
-    elec_lhs = gen_by_zone + dis_by_zone - ch_by_zone - ely_p + net_e + shed_e
-    m.add_constraints(elec_lhs == demand_e - external_e, name="elec_balance")
+    # external_e / external_h2 are net imports (import +), so they add to supply.
+    elec_lhs = (gen_by_zone + dis_by_zone - ch_by_zone - ely_p + net_e
+                + external_e + shed_e - dump_e)
+    m.add_constraints(elec_lhs == demand_e, name="elec_balance")
 
-    h2_lhs = ely_eff_da * ely_p + term_h2 + net_h + shed_h - h2_cons_by_zone
-    m.add_constraints(h2_lhs == demand_h - external_h2, name="h2_balance")
+    h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2 + shed_h
+              - h2_cons_by_zone - dump_h)
+    m.add_constraints(h2_lhs == demand_h, name="h2_balance")
 
     # ---- ramps ----------------------------------------------------------- #
     if cfg.enable_ramps and len(commit) > 0:
@@ -355,7 +363,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     # ---- objective ------------------------------------------------------- #
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
     obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
-        + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum())
+        + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
+        + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum())
     m.add_objective(obj)
 
     br = BuildResult(m, cfg, zones, hours, gens, commit, storage, gen_upper,
@@ -387,12 +396,17 @@ def _profile_da(zdata, zones, hours, col) -> xr.DataArray:
 
 
 def _external_exchange(zdata, zones, hours, prefix) -> xr.DataArray:
-    """Net fixed exchange with non-modelled neighbours (native sign: <0 = export).
+    """Net fixed exchange with non-modelled neighbours, as a **net injection**
+    into the zone (import positive, export negative).
 
     Sums every profile column starting with ``prefix`` per zone:
       * "Exports"   -> electricity exchange (e.g. Exports_AT00_CH00)
       * "H2Exports" -> hydrogen exchange   (e.g. H2Exports_AT00_IT00, H2Exports_DE00)
     Note "H2Exports" does not start with "Exports", so the two never collide.
+
+    The columns use the directional convention "positive = export from the zone"
+    (matching the PLEXOS A->B crossborder sign), so we NEGATE the sum: a negative
+    column value is an import = inflow, which must add to the zone's supply.
     """
     rows = []
     for z in zones:
@@ -401,7 +415,7 @@ def _external_exchange(zdata, zones, hours, prefix) -> xr.DataArray:
         s = np.zeros(len(hours))
         for c in cols:
             s = s + _num(prof[c].to_numpy())
-        rows.append(s)
+        rows.append(-s)  # net injection: import (+), export (-)
     return xr.DataArray(np.vstack(rows), coords={ZONE: pd.Index(zones, name=ZONE), HOUR: hours},
                         dims=[ZONE, HOUR])
 

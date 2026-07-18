@@ -34,6 +34,8 @@ def extract(build: BuildResult) -> dict[str, pd.DataFrame]:
         "term_h2": _sol(build, "term_h2"),
         "shed_e": _sol(build, "shed_e"),
         "shed_h": _sol(build, "shed_h"),
+        "dump_e": _sol(build, "dump_e"),
+        "dump_h": _sol(build, "dump_h"),
     }
 
 
@@ -88,6 +90,8 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     term = zrows("term_h2")
     shed_e = zrows("shed_e")
     shed_h = zrows("shed_h")
+    dump_e = zrows("dump_e")
+    dump_h = zrows("dump_h")
 
     demand_e = _zones_on_rows(build.demand_e.to_pandas(), z).reindex(z)
     demand_h = _zones_on_rows(build.demand_h.to_pandas(), z).reindex(z)
@@ -106,12 +110,12 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     net_h = _net_import_from_solution(build, "h")
 
     # Electricity residual
-    res_e = (gen_z + dis_z - ch_z - ely + net_e + external_e + shed_e - demand_e)
+    res_e = (gen_z + dis_z - ch_z - ely + net_e + external_e + shed_e - dump_e - demand_e)
     max_e = float(np.abs(res_e.to_numpy()).max()) if res_e.size else 0.0
 
-    # Hydrogen residual: ely_prod + term + net_h + shed_h - h2_cons == demand_h - external_h2
+    # Hydrogen residual
     ely_prod = _ely_production(build, sol)
-    res_h = (ely_prod + term + net_h + shed_h + external_h2 - demand_h - h2_cons)
+    res_h = (ely_prod + term + net_h + shed_h + external_h2 - dump_h - demand_h - h2_cons)
     max_h = float(np.abs(res_h.to_numpy()).max()) if res_h.size else 0.0
 
     return {"max_elec_residual": max_e, "max_h2_residual": max_h, "tol": tol}
@@ -157,6 +161,8 @@ def summary(build: BuildResult) -> dict[str, float]:
     cfg = build.cfg
     shed_e = sol["shed_e"].to_numpy().sum() if not sol["shed_e"].empty else 0.0
     shed_h = sol["shed_h"].to_numpy().sum() if not sol["shed_h"].empty else 0.0
+    dump_e = sol["dump_e"].to_numpy().sum() if not sol["dump_e"].empty else 0.0
+    dump_h = sol["dump_h"].to_numpy().sum() if not sol["dump_h"].empty else 0.0
     gen_total = sol["gen_p"].to_numpy().sum() if not sol["gen_p"].empty else 0.0
     ely_total = sol["ely_p"].to_numpy().sum() if not sol["ely_p"].empty else 0.0
     term_total = sol["term_h2"].to_numpy().sum() if not sol["term_h2"].empty else 0.0
@@ -176,6 +182,8 @@ def summary(build: BuildResult) -> dict[str, float]:
         "h2_terminal_import_mwh": float(term_total),
         "elec_shed_mwh": float(shed_e),
         "h2_shed_mwh": float(shed_h),
+        "elec_dumped_mwh": float(dump_e),
+        "h2_dumped_mwh": float(dump_h),
     }
 
 
@@ -247,6 +255,7 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
     dis_z, ch_z = _zone_sum(sol["dis"], z, H), _zone_sum(sol["ch"], z, H)
     ely, term = zrows("ely_p"), zrows("term_h2")
     shed_e, shed_h = zrows("shed_e"), zrows("shed_h")
+    dmp_e, dmp_h = zrows("dump_e"), zrows("dump_h")
     net_e, net_h = _net_import_from_solution(build, "e"), _net_import_from_solution(build, "h")
     dem_e, dem_h = da_rows(build.demand_e), da_rows(build.demand_h)
     ext_e, ext_h = da_rows(build.external_e), da_rows(build.external_h2)
@@ -283,6 +292,7 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("Net line import", net_e.loc[zone]),
             ("External exchange", ext_e.loc[zone]),
             ("Load shedding", shed_e.loc[zone]),
+            ("Dumped/curtailed (-)", -dmp_e.loc[zone]),
             ("Demand (-)", -dem_e.loc[zone]),
         ]
         return out
@@ -295,6 +305,7 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("Net pipeline import", net_h.loc[zone]),
             ("External exchange", ext_h.loc[zone]),
             ("Load shedding", shed_h.loc[zone]),
+            ("Dumped/curtailed (-)", -dmp_h.loc[zone]),
             ("H2 plant consumption (-)", -h2_cons.loc[zone]),
             ("Demand (-)", -dem_h.loc[zone]),
         ]
