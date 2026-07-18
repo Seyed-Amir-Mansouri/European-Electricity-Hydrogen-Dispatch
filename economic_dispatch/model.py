@@ -359,6 +359,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     br = BuildResult(m, cfg, zones, hours, gens, commit, storage, gen_upper,
                      demand_e, demand_h, external_e, net.elec, net.hydrogen, net)
     br._ely_eff = pd.Series(ely_eff, index=zones)  # for exact H2-balance validation
+    br._ely_cap = pd.Series(ely_cap, index=zones)      # electrolyser power capacity (MW)
+    br._term_cap = pd.Series(term_cap, index=zones)    # H2 terminal import capacity (MW, as used)
     return br
 
 

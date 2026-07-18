@@ -211,3 +211,73 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
             net.to_csv(out_dir / f"flows_{'elec' if tag == 'e' else 'h2'}.csv")
 
     pd.Series(summary(build)).to_csv(out_dir / "summary.csv")
+
+
+def write_inputs(build: BuildResult, out_dir: Path) -> None:
+    """Export the per-node input data exactly as the model resolved and used it.
+
+    Writes, into ``out_dir/inputs/``:
+      * nodes_generators.csv - every generation resource per node with resolved
+        parameters (capacity, units, min/max per-unit power, marginal cost,
+        efficiency, ramp, must-run, category, H2-fuel flag)
+      * nodes_storage.csv    - storage devices per node (power, energy, efficiency)
+      * network_lines.csv    - the elec & H2 lines actually used (endpoints, caps, loss)
+      * nodes_summary.csv    - one row per node: demands, exchange, capacities by
+        type, electrolyser/terminal capacity, resource counts
+    """
+    out_dir = Path(out_dir) / "inputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.csv"):
+        old.unlink()
+
+    z = build.zones
+    H = len(build.hours)
+    g = build.gens
+
+    # Per-generator resolved parameters
+    g.reset_index().to_csv(out_dir / "nodes_generators.csv", index=False)
+
+    # Storage devices
+    if not build.storage.empty:
+        build.storage.reset_index().to_csv(out_dir / "nodes_storage.csv", index=False)
+
+    # Network lines actually used
+    line_rows = []
+    for carrier, lines in [("electricity", build.elines), ("hydrogen", build.hlines)]:
+        for l in lines:
+            line_rows.append(dict(carrier=carrier, frm=l.frm, to=l.to,
+                                  cap_from_to_mw=l.cap_ft, cap_to_from_mw=l.cap_tf,
+                                  loss_fraction=l.loss))
+    pd.DataFrame(line_rows).to_csv(out_dir / "network_lines.csv", index=False)
+
+    # Per-node summary
+    def cap_by(cat):
+        return g[g["category"] == cat].groupby("zone")["pmax"].sum().reindex(z).fillna(0.0)
+
+    def demand_sum(da):
+        return _zones_on_rows(da.to_pandas(), z).reindex(z).fillna(0.0).sum(axis=1)
+
+    sto = build.storage
+    sto_e = (sto.groupby("zone")["ecap"].sum().reindex(z).fillna(0.0)
+             if not sto.empty else pd.Series(0.0, index=z))
+    sto_p = (sto.groupby("zone")["pdis"].sum().reindex(z).fillna(0.0)
+             if not sto.empty else pd.Series(0.0, index=z))
+
+    summ = pd.DataFrame(index=pd.Index(z, name="zone"))
+    summ["elec_demand_mwh"] = demand_sum(build.demand_e)
+    summ["h2_demand_mwh"] = demand_sum(build.demand_h)
+    summ["ext_exchange_mwh"] = demand_sum(build.external_e)
+    summ["committable_cap_mw"] = cap_by(dl.CAT_COMMIT)
+    summ["vres_cap_mw"] = cap_by(dl.CAT_VRES)
+    summ["ror_cap_mw"] = cap_by(dl.CAT_ROR)
+    summ["profile_cap_mw"] = cap_by(dl.CAT_PROFILE)
+    summ["electrolyser_cap_mw"] = getattr(build, "_ely_cap", pd.Series(0.0, index=z)).reindex(z).fillna(0.0)
+    summ["h2_terminal_cap_mw"] = getattr(build, "_term_cap", pd.Series(0.0, index=z)).reindex(z).fillna(0.0)
+    summ["storage_energy_mwh"] = sto_e
+    summ["storage_power_mw"] = sto_p
+    summ["n_generators"] = g.groupby("zone").size().reindex(z).fillna(0).astype(int)
+    summ["n_committable"] = (g[g["category"] == dl.CAT_COMMIT].groupby("zone").size()
+                             .reindex(z).fillna(0).astype(int))
+    summ["n_storage"] = (sto.groupby("zone").size().reindex(z).fillna(0).astype(int)
+                         if not sto.empty else 0)
+    summ.round(3).to_csv(out_dir / "nodes_summary.csv")

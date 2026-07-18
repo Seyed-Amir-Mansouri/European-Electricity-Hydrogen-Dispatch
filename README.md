@@ -157,8 +157,22 @@ economic_dispatch/
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
-outputs/             generated CSVs (generation, flows, storage, summary)
+outputs/             results CSVs (generation, flows, storage, shedding, summary)
+outputs/inputs/      per-node input data as the model resolved it (see below)
 ```
+
+## Exported node data
+
+Every run also writes, to `outputs/inputs/` (or `outputs/<tag>/inputs/`), the
+per-node input data exactly as the model built and used it — an audit trail of
+what each modelled zone contributed:
+
+| File | Contents |
+|------|----------|
+| `nodes_generators.csv` | every generation resource per node with resolved parameters: capacity, number of units, per-unit min/max power, marginal cost, efficiency, ramp, must-run, category, H2-fuel flag |
+| `nodes_storage.csv` | storage devices per node (discharge/charge power, energy, efficiency) |
+| `network_lines.csv` | the electricity & hydrogen lines actually used (endpoints, directional capacities, loss fraction) |
+| `nodes_summary.csv` | one row per node: elec/H2 demand, external exchange, capacity by resource type, electrolyser & terminal capacity, storage, resource counts |
 
 ## Verification
 
