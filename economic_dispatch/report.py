@@ -265,6 +265,9 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
     dem_e, dem_h = da_rows(build.demand_e), da_rows(build.demand_h)
     ext_e, ext_h = da_rows(build.external_e), da_rows(build.external_h2)
     ely_prod = _ely_production(build, sol)
+    # Zonal marginal prices (balance duals), EUR/MWh, if computed.
+    price_e = da_rows(build.price_e) if getattr(build, "price_e", None) is not None else None
+    price_h = da_rows(build.price_h) if getattr(build, "price_h", None) is not None else None
 
     # H2 consumed by H2-fired plants, per zone
     h2 = build.gens[build.gens["h2_fuel"]]
@@ -300,6 +303,8 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("Dumped/curtailed (-)", -dmp_e.loc[zone]),
             ("Demand (-)", -dem_e.loc[zone]),
         ]
+        if price_e is not None:
+            out.append(("Marginal Price (EUR/MWh)", price_e.loc[zone]))
         return out
 
     # ---- hydrogen ----
@@ -316,6 +321,8 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             ("H2 plant consumption (-)", -h2_cons.loc[zone]),
             ("Demand (-)", -dem_h.loc[zone]),
         ]
+        if price_h is not None:
+            out.append(("Marginal Price (EUR/MWh)", price_h.loc[zone]))
         return out
 
     build_table(elec_cols).to_csv(out_dir / "hourly_balance_elec.csv")

@@ -76,6 +76,7 @@ class RunConfig:
     enable_h2_terminal: bool = True    # allow external H2 supply at import terminals
     enable_h2_storage: bool = True     # model H2 storage (Injection/Withdraw Hydrogen power)
     cyclic_storage: bool = True        # end-of-day SoC must return to initial SoC
+    compute_prices: bool = True        # zonal marginal prices (LP re-solve with commitment fixed)
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

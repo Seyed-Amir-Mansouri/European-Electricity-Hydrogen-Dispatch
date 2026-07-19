@@ -38,6 +38,7 @@ CLI flags:
 | `--no-ramps` | drop generator ramp limits |
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
+| `--no-prices` | skip the marginal-price computation (the extra LP re-solve) |
 | `--time-limit S` | solver time limit in seconds |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
@@ -74,8 +75,13 @@ two-level column header `(zone, category)` and one row per hour:
 
 | File | Per-zone categories |
 |------|---------------------|
-| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Dumped/curtailed, Demand |
-| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, H2 storage discharge / charge, Load shedding, Dumped/curtailed, H2 plant consumption, Demand |
+| `hourly_balance_elec.csv` | each generation technology (MW), plus Storage discharge / charge, Electrolyser load, Net line import, External exchange, Load shedding, Dumped/curtailed, Demand, **Marginal Price (EUR/MWh)** |
+| `hourly_balance_h2.csv` | Electrolyser production, Terminal import, Net pipeline import, External exchange, H2 storage discharge / charge, Load shedding, Dumped/curtailed, H2 plant consumption, Demand, **Marginal Price (EUR/MWh)** |
 
-Signs are chosen so supply is `+` and consumption `-`, so each row sums to ~0
-(the nodal balance holds).
+Signs are chosen so supply is `+` and consumption `-`, so the energy (MW)
+categories of each row sum to ~0 (the nodal balance holds).
+
+**Marginal Price (EUR/MWh)** is the zonal price — the dual of the nodal balance.
+Because duals need an LP, the model fixes the integer commitment to its MILP
+optimum and re-solves as an LP to read the balance shadow prices (skip this extra
+solve with `--no-prices`).

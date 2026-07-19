@@ -32,6 +32,8 @@ def parse_args() -> RunConfig:
     p.add_argument("--no-ramps", action="store_true")
     p.add_argument("--reserves", action="store_true", help="enable FCR/FRR constraints")
     p.add_argument("--no-h2-terminal", action="store_true")
+    p.add_argument("--no-prices", action="store_true",
+                   help="skip marginal-price computation (the extra LP re-solve)")
     p.add_argument("--time-limit", type=float, default=600.0, help="solver time limit (s)")
     p.add_argument("--out-tag", default=None,
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
@@ -64,6 +66,7 @@ def parse_args() -> RunConfig:
     cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
     cfg.enable_h2_terminal = not a.no_h2_terminal
+    cfg.compute_prices = not a.no_prices
     cfg.time_limit_s = a.time_limit
     cfg.out_tag = a.out_tag
     return cfg
@@ -96,6 +99,11 @@ def run(cfg: RunConfig) -> model.BuildResult:
     if status != "ok":
         print(f"WARNING: solver returned status={status}")
         return build
+
+    if cfg.compute_prices:
+        t = time.time()
+        build.price_e, build.price_h = model.marginal_prices(zdata, net, cfg, build)
+        print(f"Marginal prices (LP re-solve): {time.time() - t:.1f}s")
 
     s = report.summary(build)
     print("\n=== Summary ===")

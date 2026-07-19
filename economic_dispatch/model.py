@@ -60,6 +60,8 @@ class BuildResult:
     elines: list[Line]
     hlines: list[Line]
     net: NetworkData
+    price_e: xr.DataArray | None = None   # elec marginal price (zone, hour), EUR/MWh
+    price_h: xr.DataArray | None = None   # H2 marginal price (zone, hour), EUR/MWh
 
 
 def _marginal_cost(zd: ZoneData, tech: str, h2_fuel: bool, co2_price: float,
@@ -233,7 +235,8 @@ def _incidence(members: pd.Series, zones: list[str], dim: str) -> xr.DataArray:
     return xr.DataArray(A, coords={dim: members.index, ZONE: zones}, dims=[dim, ZONE])
 
 
-def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) -> BuildResult:
+def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
+                fix_commit: pd.Series | None = None) -> BuildResult:
     zones = cfg.zones
     H = len(zdata[zones[0]].profiles)
     hours = pd.Index(range(H), name=HOUR)
@@ -257,7 +260,14 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     commit = gens[gens["category"] == dl.CAT_COMMIT].copy()
     cidx = commit.index
     n_upper = xr.DataArray(commit["units"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    n = m.add_variables(lower=0.0, upper=n_upper, integer=True, coords=[cidx], name="n_units")
+    if fix_commit is None:
+        n = m.add_variables(lower=0.0, upper=n_upper, integer=True, coords=[cidx], name="n_units")
+    else:
+        # LP relaxation with commitment fixed to its MILP optimum, so the solver
+        # returns constraint duals (marginal prices).
+        fixed = xr.DataArray(fix_commit.reindex(cidx).fillna(0.0).to_numpy(float),
+                             coords={GEN: cidx}, dims=[GEN])
+        n = m.add_variables(lower=fixed, upper=fixed, name="n_units")
 
     pmin = xr.DataArray(commit["pmin_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
     pmax = xr.DataArray(commit["pmax_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
@@ -387,6 +397,22 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     br._ely_cap = pd.Series(ely_cap, index=zones)      # electrolyser power capacity (MW)
     br._term_cap = pd.Series(term_cap, index=zones)    # H2 terminal import capacity (MW, as used)
     return br
+
+
+def marginal_prices(zdata, net, cfg, milp_build: BuildResult):
+    """Zonal marginal prices (EUR/MWh) as the duals of the nodal balances.
+
+    Duals exist only for LPs, so we fix the integer commitment to its MILP
+    optimum and re-solve the resulting LP; HiGHS then returns the balance duals.
+    Returns (price_e, price_h) DataArrays over (zone, hour). The dual of
+    ``balance == demand`` is d(cost)/d(demand) = the marginal price of supply.
+    """
+    n_sol = milp_build.model.solution["n_units"].to_pandas()
+    lp = build_model(zdata, net, cfg, fix_commit=n_sol)
+    lp.model.solve(solver_name=cfg.solver_name, time_limit=cfg.time_limit_s)
+    price_e = lp.model.constraints["elec_balance"].dual
+    price_h = lp.model.constraints["h2_balance"].dual
+    return price_e, price_h
 
 
 # --------------------------------------------------------------------------- #
