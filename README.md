@@ -79,9 +79,3 @@ two-level column header `(zone, category)` and one row per hour:
 
 Signs are chosen so supply is `+` and consumption `-`, so each row sums to ~0
 (the nodal balance holds).
-
-## Verification
-
-`report.validate()` independently recomputes both nodal balances from the
-solution and asserts residuals < 1e-3 MW. `run_dispatch.py` prints this check
-(`PASS`/`FAIL`) after every solve.
