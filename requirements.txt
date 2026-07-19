@@ -1,14 +1,9 @@
-# Install into the shared projects-venv:
-#   "G:/My Drive/Temp/BSRO/projects-venv/Scripts/pip.exe" install -r requirements.txt
-#
-# NOTE: this machine's CPU lacks AVX2, so the standard `polars` wheel (a linopy
-# dependency) crashes. We use the LTS-CPU build instead of plain polars.
 linopy>=0.8
 highspy>=1.7
 pandas>=2.0
 numpy>=1.24
 openpyxl>=3.1
-pyarrow>=15            # read the inputs/ crossborder result databases (parquet)
-streamlit>=1.30        # web UI (app.py)
-altair>=5              # charts in the web UI
-polars-lts-cpu>=1.33   # replaces `polars`; required on non-AVX2 CPUs
+pyarrow>=15
+streamlit>=1.30
+altair>=5
+polars-lts-cpu>=1.33
