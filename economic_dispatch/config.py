@@ -15,8 +15,8 @@ from pathlib import Path
 # the workbooks present (see discover_zones), so adding/removing a zone file
 # "just works".
 ALL_ZONES = [
-    "AT00", "BE00", "BEOF", "CZ00", "DE00", "DEKF", "FR00", "FR15", "HR00",
-    "HU00", "LUB1", "LUF1", "LUG1", "LUV1", "NL00", "NL6H", "NLLL", "PL00",
+    "AT00", "BE00", "BEOF", "CZ00", "DE00", "DEKF", "FR00", "HR00",
+    "HU00", "LUB1", "LUF1", "LUG1", "LUV1", "NL00", "NLLL", "PL00",
     "PL00E", "PL00I", "RO00", "SI00", "SK00",
 ]
 

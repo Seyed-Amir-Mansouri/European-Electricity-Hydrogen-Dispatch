@@ -303,16 +303,17 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         ch_h2_by_zone = (A_sto * mask_h * ch).sum(STO)
 
         soc_init = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
-        inflow_mat = np.vstack([sinflow[s] for s in sidx])
-        for h in range(H):
-            inf_h = xr.DataArray(inflow_mat[:, h], coords={STO: sidx}, dims=[STO])
-            eff_da = xr.DataArray(eff, coords={STO: sidx}, dims=[STO])
-            prev = soc.sel({HOUR: h - 1}) if h > 0 else \
-                xr.DataArray(soc_init, coords={STO: sidx}, dims=[STO])
-            lhs = soc.sel({HOUR: h}) - eff_da * ch.sel({HOUR: h}) + dis.sel({HOUR: h}) \
-                + spill.sel({HOUR: h})
-            rhs = prev + inf_h
-            m.add_constraints(lhs == rhs, name=f"soc_balance_{h}")
+        inflow_mat = np.vstack([sinflow[s] for s in sidx])            # (sto, H)
+        eff_da = xr.DataArray(eff, coords={STO: sidx}, dims=[STO])
+        # One vectorised recursion instead of a per-hour loop:
+        #   soc[h] - soc[h-1] - eff*ch[h] + dis[h] + spill[h] = inflow[h]
+        # ``soc.shift(hour=1)`` is empty at h=0, so inject the initial SoC into
+        # the RHS only there (where "soc[h-1]" would otherwise be the start value).
+        rhs_mat = inflow_mat.copy()
+        rhs_mat[:, 0] = rhs_mat[:, 0] + soc_init
+        rhs = xr.DataArray(rhs_mat, coords={STO: sidx, HOUR: hours}, dims=[STO, HOUR])
+        m.add_constraints(soc - soc.shift({HOUR: 1}) - eff_da * ch + dis + spill == rhs,
+                          name="soc_balance")
         if cfg.cyclic_storage:
             end = xr.DataArray(soc_init, coords={STO: sidx}, dims=[STO])
             m.add_constraints(soc.sel({HOUR: H - 1}) == end, name="soc_cyclic")
@@ -371,14 +372,13 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     if cfg.enable_ramps and len(commit) > 0:
         rup = xr.DataArray(commit["ramp_up"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
         rdn = xr.DataArray(commit["ramp_dn"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-        active_up = commit["ramp_up"].to_numpy(float).max() > 0
-        active_dn = commit["ramp_dn"].to_numpy(float).max() > 0
-        for h in range(1, H):
-            delta = gen_p.sel({GEN: cidx, HOUR: h}) - gen_p.sel({GEN: cidx, HOUR: h - 1})
-            if active_up:
-                m.add_constraints(delta <= rup, name=f"ramp_up_{h}")
-            if active_dn:
-                m.add_constraints(-delta <= rdn, name=f"ramp_dn_{h}")
+        gp_c = gen_p.sel({GEN: cidx})
+        # delta[h] = gen[h] - gen[h-1] for h >= 1 (drop hour 0: no predecessor).
+        delta = (gp_c - gp_c.shift({HOUR: 1})).isel({HOUR: slice(1, None)})
+        if commit["ramp_up"].to_numpy(float).max() > 0:
+            m.add_constraints(delta <= rup, name="ramp_up")
+        if commit["ramp_dn"].to_numpy(float).max() > 0:
+            m.add_constraints(-delta <= rdn, name="ramp_dn")
 
     # ---- reserves (optional) -------------------------------------------- #
     if cfg.enable_reserves:
