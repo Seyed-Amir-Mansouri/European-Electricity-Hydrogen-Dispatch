@@ -1,10 +1,12 @@
 # Coupled Electricity + Hydrogen Economic Dispatch
 
-A **MILP unit-commitment economic dispatch** over 23 ENTSO-E-style bidding
-zones, coupling two energy carriers — **electricity** and **hydrogen** — using
+A **MILP unit-commitment economic dispatch** over ENTSO-E-style bidding zones,
+coupling two energy carriers — **electricity** and **hydrogen** — using
 [linopy](https://linopy.readthedocs.io) + the open-source **HiGHS** solver. The
 horizon is a whole number of days (default one day = 24 hours; use
-`--start-day/--end-day` for multi-day runs). Inputs are the workbooks in `XLSXs/`.
+`--start-day/--end-day` for multi-day runs). All data is the **ENTSO-E TYNDP
+National Trends 2030 (NT2030)** scenario, supplied as the parquet databases in
+`inputs/`.
 
 ## Quick start
 
@@ -13,24 +15,21 @@ Dependencies live in the shared `projects-venv`; code lives here in `Project 1/`
 ```bash
 # from Project 1/
 "../projects-venv/Scripts/pip.exe" install -r requirements.txt   # first time only
-"../projects-venv/Scripts/python.exe" build_db.py                              # first time / when XLSXs change
 "../projects-venv/Scripts/python.exe" run_dispatch.py                          # all zones, day 1
 "../projects-venv/Scripts/python.exe" run_dispatch.py --zones DE00,FR00 --day 10       # a single day
 "../projects-venv/Scripts/python.exe" run_dispatch.py --start-day 10 --end-day 16      # a 7-day horizon
 "../projects-venv/Scripts/python.exe" run_dispatch.py --no-ramps --reserves
 ```
 
-At runtime everything is read from the **`inputs/` parquet databases** —
-`zones_2030.parquet` (per-zone data) and `networks_2030.parquet` (line topology +
-CO₂/gas prices) — both built by `build_db.py` from the `XLSXs/` workbooks. **The
-`XLSXs/` folder is only needed to (re)build the databases, not to run the model.**
-Rebuild whenever the workbooks change.
+Everything the model needs is in the **`inputs/` NT2030 databases** — zone data,
+network topology + prices, and cross-border flows — so a fresh clone runs
+straight away.
 
 CLI flags:
 
 | Flag | Meaning |
 |------|---------|
-| `--zones DE00,FR00,…` | subset of zones (default: every workbook found in `XLSXs/`) |
+| `--zones DE00,FR00,…` | subset of zones (default: all zones in the database) |
 | `--day D` | single day of year `D` (1-364); shorthand for `--start-day D --end-day D` |
 | `--start-day S --end-day E` | multi-day horizon covering days `S..E` inclusive (`(E-S+1)·24` hours) |
 | `--no-storage` | drop storage & state-of-charge |
@@ -59,13 +58,11 @@ Multi-day runs build a larger MILP (constraints scale with the number of hours);
 storage state-of-charge is cyclic over the **whole** horizon and must-run uses
 the first day's month.
 
-**Zones are auto-discovered** from the workbooks in `XLSXs/` (any `*.xlsx`
-except `Networks.xlsx`). Deleting a zone file removes it from a default run
-automatically — and its transmission/pipeline links drop out too, since
-`Networks.xlsx` lines are kept only when both endpoints are active zones.
-Adding a new `<CODE>.xlsx` with the standard six-sheet schema makes it available
-with no code change. Requesting a zone whose workbook is missing is a clear
-error.
+**Zones default to every zone in the database.** Selecting a subset with
+`--zones` automatically reclassifies each border: a line between two selected
+zones stays an internal (optimised) link, while a line to a non-selected zone
+becomes a fixed cross-border exchange (see below). Requesting a zone absent from
+the database is a clear error.
 
 ## What the model does
 
@@ -98,28 +95,27 @@ HYDROGEN:
        + net external H2 import + shed_h
      = H2 demand + H2-plant fuel use (gen / efficiency)
 
-(Net external import = -(sum of Exports_*/H2Exports_* columns), since those
-columns use positive = export; a negative column value is an inflow = supply.)
+(Net external import is the fixed exchange with non-modelled neighbours, positive
+= import; derived from the cross-border databases — see below.)
 ```
 
-## Data model (per zone workbook)
+## Data model
 
-| Sheet | Used for |
-|-------|----------|
-| Technology Capacities | installed MW per technology |
-| Storage Capacities | storage energy (MWh) |
-| Reserve Requirements | FCR/FRR (only with `--reserves`) |
-| Hourly Profiles | demand, RES capacity factors / MW, hydro inflows, external elec (`Exports_*`) & H2 (`H2Exports_*`) exchange |
-| Technology Characteristics | units, min stable power, ramps, efficiency, CO2 factor, prices, must-run |
-| Gas & Hydrogen Assets | hydrogen terminal / storage capacities |
+Per-zone data is in **`inputs/zones_2030.parquet`** — for every zone:
 
-`Networks.xlsx` supplies the electricity & hydrogen line topology (directional
-MW limits + loss fractions) and global CO2 & gas prices — consolidated by
-`build_db.py` into `inputs/networks_2030.parquet`, which the model reads at
-runtime (filtering lines to the selected zones). Hydrogen line capacities are
-overridden from `inputs/ReferenceGrid_Hydrogen.xlsx` (the `2030` inter-country
-sheet, GW × 1000 → MW, direction-aligned) wherever a line's country pair has a
-reference border.
+| Category | Contents |
+|----------|----------|
+| Technology capacities | installed MW per technology |
+| Storage capacities | storage energy (MWh) |
+| Reserve requirements | FCR/FRR (only with `--reserves`) |
+| Hourly profiles | demand, RES capacity factors / MW, hydro inflows |
+| Technology characteristics | units, min stable power, ramps, efficiency, CO2 factor, prices, must-run |
+| Gas & hydrogen assets | hydrogen terminal / storage capacities |
+
+**`inputs/networks_2030.parquet`** holds the electricity & hydrogen line topology
+(directional MW limits + loss fractions, hydrogen capacities per the NT2030
+reference grid) and the global CO₂ & gas prices; the model filters these lines to
+the selected zones at runtime.
 
 ### Cross-border exchange from the result databases (`inputs/`)
 The fixed exchange with non-modelled neighbours is **computed on the fly** from
@@ -131,16 +127,13 @@ selected) or a fixed external exchange (neighbour outside the selection).
 Hydrogen is resolved at country level, with `IB*` interconnector hubs and Steam-
 Methane-Reformer output folded in, attached to each country's main zone. The
 method is specified in [`inputs/EXPORTS_CALCULATION.md`](inputs/EXPORTS_CALCULATION.md).
-The `inputs/` databases are required (there is no Excel-column fallback).
 
-### Consolidated zone database
-`python build_db.py` writes **`inputs/zones_2030.parquet`** — every sheet of
-every zone workbook in one long, lossless table
-(`zone, section, item, hour, value_num, value_str`): scalar sheets and technology
-characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`. **This is the
-model's runtime source for zone data** — `data_loader` reconstructs each
-`ZoneData` from it (predicate-pushdown by zone), so runs no longer open the
-per-zone Excel files. The workbooks are only needed to (re)build the database.
+### Zone database format
+`inputs/zones_2030.parquet` is a long, lossless table
+(`zone, section, item, hour, value_num, value_str`): scalar data and technology
+characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`.
+`data_loader` reconstructs each zone's data from it with predicate-pushdown by
+zone.
 
 ## Key assumptions (all tunable in `economic_dispatch/config.py`)
 
@@ -170,11 +163,10 @@ per-zone Excel files. The workbooks are only needed to (re)build the database.
   capacity is an **assumption**: `h2_storage_hours × Withdraw (Hydrogen)`
   (default 168 h), round-trip efficiency `h2_storage_efficiency` (default 1.0).
 
-> **Note on hydrogen shedding:** with the electrolyser capacities in the data,
-> modelled hydrogen supply (electrolysis + terminal imports + pipelines) can be
-> smaller than hydrogen demand, producing H2 load-shedding. This is a genuine,
-> transparent result — if H2 demand is expected to be met partly by sources not
-> in this dataset (e.g. SMR), treat the H2 demand or terminal price accordingly.
+> **Note on supply shortfalls:** load-shedding and dumping enter both balances as
+> slacks (priced at VOLL / a small dump penalty), so the problem is always
+> feasible and any unmet demand or curtailed surplus is reported, not hidden. With
+> the full NT2030 data, hydrogen demand is served in full (zero shedding).
 
 > **Note on a suppressed linopy warning:** `solve.py` silences the
 > `"Coordinates across variables not equal. Perform outer join."` `UserWarning`.
@@ -191,15 +183,14 @@ per-zone Excel files. The workbooks are only needed to (re)build the database.
 ```
 economic_dispatch/
   config.py          run settings & tunable assumptions
-  data_loader.py     parse a zone workbook + technology classification
-  network_loader.py  build/load the networks parquet database
+  data_loader.py     load zone data from the database + technology classification
+  network_loader.py  load the networks database
   model.py           build the linopy MILP
   exports_loader.py  compute cross-border exchange from the inputs/ databases
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
-build_db.py          XLSXs/ -> inputs/zones_2030.parquet + networks_2030.parquet
-inputs/              crossborder + zone result databases (parquet) + EXPORTS_CALCULATION.md
+inputs/              NT2030 databases (zones, networks, cross-border) + EXPORTS_CALCULATION.md
 outputs/             results CSVs (generation, flows, storage, shedding, summary,
                      hourly per-tech balance)
 outputs/inputs/      per-node input data as the model resolved it (see below)
@@ -207,8 +198,8 @@ outputs/inputs/      per-node input data as the model resolved it (see below)
 
 ## Hourly per-technology balance (PLEXOS-style)
 
-Every run writes two wide CSVs modelled on the MMStandardOutputFile
-`Hourly Market Data` / `Hourly H2 Data` sheets — a two-level column header
+Every run writes two wide CSVs in the style of the market model's hourly
+per-technology output (electricity and hydrogen) — a two-level column header
 `(zone, category)` with one row per hour:
 
 | File | Per-zone categories |
