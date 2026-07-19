@@ -13,11 +13,17 @@ Dependencies live in the shared `projects-venv`; code lives here in `Project 1/`
 ```bash
 # from Project 1/
 "../projects-venv/Scripts/pip.exe" install -r requirements.txt   # first time only
-"../projects-venv/Scripts/python.exe" run_dispatch.py                          # all 23 zones, day 1
+"../projects-venv/Scripts/python.exe" build_zones_db.py                        # first time / when XLSXs change
+"../projects-venv/Scripts/python.exe" run_dispatch.py                          # all zones, day 1
 "../projects-venv/Scripts/python.exe" run_dispatch.py --zones DE00,FR00 --day 10       # a single day
 "../projects-venv/Scripts/python.exe" run_dispatch.py --start-day 10 --end-day 16      # a 7-day horizon
 "../projects-venv/Scripts/python.exe" run_dispatch.py --no-ramps --reserves
 ```
+
+Zone data is read at runtime from **`inputs/zones_2030.parquet`** (built by
+`build_zones_db.py` from the `XLSXs/` workbooks); `Networks.xlsx` still supplies
+the line topology and CO₂/gas prices. Rebuild the database whenever the zone
+workbooks change.
 
 CLI flags:
 
@@ -125,8 +131,10 @@ The `inputs/` databases are required (there is no Excel-column fallback).
 `python build_zones_db.py` writes **`inputs/zones_2030.parquet`** — every sheet of
 every zone workbook in one long, lossless table
 (`zone, section, item, hour, value_num, value_str`): scalar sheets and technology
-characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`. It mirrors
-exactly what `data_loader` reads from the Excel files, as a single queryable file.
+characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`. **This is the
+model's runtime source for zone data** — `data_loader` reconstructs each
+`ZoneData` from it (predicate-pushdown by zone), so runs no longer open the
+per-zone Excel files. The workbooks are only needed to (re)build the database.
 
 ## Key assumptions (all tunable in `economic_dispatch/config.py`)
 

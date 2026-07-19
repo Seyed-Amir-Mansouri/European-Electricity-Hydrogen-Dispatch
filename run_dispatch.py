@@ -13,7 +13,7 @@ import argparse
 import time
 from pathlib import Path
 
-from economic_dispatch.config import RunConfig, ALL_ZONES, discover_zones
+from economic_dispatch.config import RunConfig
 from economic_dispatch import data_loader, network_loader, model, solve, report
 
 
@@ -49,17 +49,17 @@ def parse_args() -> RunConfig:
         p.error(f"invalid day range: start={start}, end={end}. Require 1 <= start <= end <= 364.")
 
     cfg = RunConfig(start_day=start, end_day=end)
+    # Zones come from the consolidated database (build it with build_zones_db.py).
+    if not Path(cfg.zones_db).exists():
+        p.error(f"zone database not found: {cfg.zones_db}. Run `python build_zones_db.py` first.")
+    available = data_loader.zones_in_db(cfg.zones_db)
     if a.zones:
         cfg.zones = [z.strip() for z in a.zones.split(",") if z.strip()]
     else:
-        # Auto-discover from the data folder; fall back to the shipped list.
-        cfg.zones = discover_zones(cfg.data_dir) or list(ALL_ZONES)
-    # Validate against workbooks that actually exist (handles added/removed files).
-    missing = [z for z in cfg.zones if not (Path(cfg.data_dir) / f"{z}.xlsx").exists()]
+        cfg.zones = available
+    missing = [z for z in cfg.zones if z not in available]
     if missing:
-        available = discover_zones(cfg.data_dir)
-        p.error(f"missing zone workbook(s) in {cfg.data_dir}: {missing}. "
-                f"Available: {available}")
+        p.error(f"zone(s) not in {Path(cfg.zones_db).name}: {missing}. Available: {available}")
     cfg.enable_storage = not a.no_storage
     cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
@@ -77,7 +77,7 @@ def run(cfg: RunConfig) -> model.BuildResult:
           f"({cfg.num_days()} day(s), hours {h0}-{h1 - 1}, {h1 - h0}h)")
 
     t = time.time()
-    zdata = {z: data_loader.load_zone(z, cfg.data_dir, h0, h1) for z in cfg.zones}
+    zdata = data_loader.load_zones_from_db(cfg.zones, cfg.zones_db, h0, h1)
     net = network_loader.load_networks(cfg.data_dir, cfg.zones)
     print(f"Loaded {len(zdata)} zones, {len(net.elec)} elec lines, "
           f"{len(net.hydrogen)} H2 lines  ({time.time() - t:.1f}s)  "

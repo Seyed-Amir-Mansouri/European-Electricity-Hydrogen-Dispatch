@@ -135,6 +135,54 @@ def load_zone(code: str, data_dir: Path, hour_start: int, hour_end: int) -> Zone
     return ZoneData(code, capacities, storage_energy, reserves, gas_h2, char, profiles)
 
 
+# --- Load from the consolidated parquet database ---------------------------
+def zones_in_db(db_path: Path) -> list[str]:
+    """Sorted list of zone codes present in the zones parquet database."""
+    df = pd.read_parquet(db_path, columns=["zone"])
+    return sorted(df["zone"].unique().tolist())
+
+
+def _zone_from_db(zdf: pd.DataFrame, code: str, h0: int, h1: int) -> ZoneData:
+    """Reconstruct a ZoneData from this zone's slice of the long parquet table."""
+    def scalar(section):
+        d = zdf[zdf["section"] == section]
+        return dict(zip(d["item"], d["value_num"]))
+
+    c = zdf[zdf["section"] == "characteristics"].copy()
+    ti = c["item"].str.split("||", n=1, expand=True, regex=False)
+    c["tech"], c["attr"] = ti[0], ti[1]
+    # keep the string value where present (e.g. must-run lists), else the number
+    c["value"] = c["value_str"].where(c["value_str"].notna(), c["value_num"])
+    char = c.pivot(index="tech", columns="attr", values="value")
+    char.index.name = "Technology"
+    char.columns.name = None
+
+    p = zdf[zdf["section"] == "profiles"]
+    prof = p.pivot(index="hour", columns="item", values="value_num")
+    prof.columns.name = None
+    prof = prof.iloc[h0:h1].reset_index(drop=True)
+
+    return ZoneData(code, scalar("capacities"), scalar("storage_energy"),
+                    scalar("reserves"), scalar("gas_h2"), char, prof)
+
+
+def load_zones_from_db(codes: list[str], db_path: Path,
+                       hour_start: int, hour_end: int) -> dict[str, ZoneData]:
+    """Load ZoneData for the given zones from ``zones_2030.parquet`` (one read)."""
+    db_path = Path(db_path)
+    if not db_path.exists():
+        raise FileNotFoundError(
+            f"Zone database not found: {db_path}. Build it with `python build_zones_db.py`.")
+    # Predicate pushdown: read only the requested zones' rows.
+    db = pd.read_parquet(db_path, filters=[("zone", "in", list(codes))])
+    present = set(db["zone"].unique())
+    missing = [z for z in codes if z not in present]
+    if missing:
+        raise KeyError(f"zones not in {db_path.name}: {missing}")
+    by_zone = {z: g for z, g in db.groupby("zone", sort=False)}
+    return {z: _zone_from_db(by_zone[z], z, hour_start, hour_end) for z in codes}
+
+
 # --- Classification --------------------------------------------------------
 def classify(tech: str) -> tuple[str, bool]:
     """Map a Technology-Capacities row name to (category, is_h2_fuel).
