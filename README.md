@@ -10,10 +10,27 @@ The horizon is a whole number of days (default one day = 24 hours; use
 National Trends 2030 (NT2030)** scenario, supplied as the parquet databases in
 `inputs/`.
 
+## Setup
+
+Requires **Python 3.12+**. From the project folder, create and activate a virtual
+environment, then install the dependencies:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1          # PowerShell   (CMD: .venv\Scripts\activate.bat)
+pip install -r requirements.txt
+```
+
+Activating the environment puts `python`, `pip`, and `streamlit` on your PATH in
+that terminal, so the commands below work as written. To use them from **any**
+terminal without activating first, add the environment's `Scripts` folder to the
+Windows **PATH** environment variable (Settings → *Edit the system environment
+variables* → *Environment Variables* → select *Path* → *New*), then restart the
+terminal.
+
 ## Quick start
 
 ```bash
-pip install -r requirements.txt                          # first time only
 python run_dispatch.py                                    # all zones, day 1
 python run_dispatch.py --zones DE00,FR00 --day 10         # a single day
 python run_dispatch.py --start-day 10 --end-day 16        # a 7-day horizon
