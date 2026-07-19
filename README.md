@@ -27,6 +27,24 @@ Everything the model needs is in the **`inputs/` NT2030 databases** — zone dat
 network topology + prices, and cross-border flows — so a fresh clone runs
 straight away.
 
+## Web UI
+
+An interactive [Streamlit](https://streamlit.io) app wraps the model — run it
+locally after installing the requirements:
+
+```bash
+# from Project 1/
+"../projects-venv/Scripts/streamlit.exe" run app.py
+```
+
+It opens in your browser (`localhost:8501`). Choose the zones, horizon, and
+options in the sidebar, click **Run dispatch**, then explore the per-zone
+**generation stack**, the electricity & hydrogen **marginal-price** charts, and
+the **balance tables** (with CSV download). The app calls the same model code as
+the CLI.
+
+## Command line
+
 CLI flags:
 
 | Flag | Meaning |

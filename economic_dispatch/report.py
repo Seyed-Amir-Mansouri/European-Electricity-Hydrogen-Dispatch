@@ -231,14 +231,21 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
 
 
 def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
-    """Write PLEXOS-style hourly per-technology balances (elec & H2).
-
-    Two wide CSVs with a two-level column header ``(zone, category)`` and one row
-    per hour, in the spirit of the MMStandardOutputFile 'Hourly Market Data' /
-    'Hourly H2 Data' sheets. Signs are chosen so supply is + and consumption -,
-    so each row sums to ~0 (the nodal balance holds).
-    """
+    """Write the hourly per-technology balance tables (elec & H2) to CSV."""
     out_dir = Path(out_dir)
+    tables = hourly_balance_tables(build)
+    tables["elec"].to_csv(out_dir / "hourly_balance_elec.csv")
+    tables["h2"].to_csv(out_dir / "hourly_balance_h2.csv")
+
+
+def hourly_balance_tables(build: BuildResult) -> dict:
+    """PLEXOS-style hourly per-technology balances as two wide DataFrames.
+
+    Two-level column header ``(zone, category)``, one row per hour. Signs are
+    chosen so supply is + and consumption - (the energy categories sum to ~0);
+    a final ``Marginal Price (EUR/MWh)`` column carries the zonal price if
+    computed. Returns ``{"elec": df, "h2": df}``.
+    """
     z = build.zones
     H = len(build.hours)
     sol = extract(build)
@@ -325,8 +332,7 @@ def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
             out.append(("Marginal Price (EUR/MWh)", price_h.loc[zone]))
         return out
 
-    build_table(elec_cols).to_csv(out_dir / "hourly_balance_elec.csv")
-    build_table(h2_cols).to_csv(out_dir / "hourly_balance_h2.csv")
+    return {"elec": build_table(elec_cols), "h2": build_table(h2_cols)}
 
 
 def write_inputs(build: BuildResult, out_dir: Path) -> None:
