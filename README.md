@@ -12,15 +12,12 @@ National Trends 2030 (NT2030)** scenario, supplied as the parquet databases in
 
 ## Quick start
 
-Dependencies live in the shared `projects-venv`; code lives here in `Project 1/`.
-
 ```bash
-# from Project 1/
-"../projects-venv/Scripts/pip.exe" install -r requirements.txt   # first time only
-"../projects-venv/Scripts/python.exe" run_dispatch.py                          # all zones, day 1
-"../projects-venv/Scripts/python.exe" run_dispatch.py --zones DE00,FR00 --day 10       # a single day
-"../projects-venv/Scripts/python.exe" run_dispatch.py --start-day 10 --end-day 16      # a 7-day horizon
-"../projects-venv/Scripts/python.exe" run_dispatch.py --no-ramps --reserves
+pip install -r requirements.txt                          # first time only
+python run_dispatch.py                                    # all zones, day 1
+python run_dispatch.py --zones DE00,FR00 --day 10         # a single day
+python run_dispatch.py --start-day 10 --end-day 16        # a 7-day horizon
+python run_dispatch.py --no-ramps --reserves
 ```
 
 Everything the model needs is in the **`inputs/` NT2030 databases** — zone data,
@@ -33,8 +30,7 @@ An interactive [Streamlit](https://streamlit.io) app wraps the model — run it
 locally after installing the requirements:
 
 ```bash
-# from Project 1/
-"../projects-venv/Scripts/streamlit.exe" run app.py
+streamlit run app.py
 ```
 
 It opens in your browser (`localhost:8501`). Choose the zones, horizon, and
@@ -70,8 +66,8 @@ runs side by side, pass **`--out-tag NAME`**, which writes to `outputs/NAME/`
 don't clobber each other). Example:
 
 ```bash
-"../projects-venv/Scripts/python.exe" run_dispatch.py --day 1  --out-tag winter_day
-"../projects-venv/Scripts/python.exe" run_dispatch.py --day 200 --out-tag summer_day
+python run_dispatch.py --day 1  --out-tag winter_day
+python run_dispatch.py --day 200 --out-tag summer_day
 # -> outputs/winter_day/  and  outputs/summer_day/  side by side
 ```
 
