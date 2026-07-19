@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Power-Hydrogen%20Co-Dispatch%20Overview.png" alt="Power-Hydrogen Co-Dispatch Overview" width="760">
+</p>
+
 # Coupled Electricity + Hydrogen Economic Dispatch
 
 A **MILP unit-commitment economic dispatch** over the **Central-European CORE
