@@ -119,9 +119,14 @@ selected) or a fixed external exchange (neighbour outside the selection).
 Hydrogen is resolved at country level, with `IB*` interconnector hubs and Steam-
 Methane-Reformer output folded in, attached to each country's main zone. The
 method is specified in [`inputs/EXPORTS_CALCULATION.md`](inputs/EXPORTS_CALCULATION.md).
-Set `exports_from_db=False` (or remove the databases) to fall back to the
-pre-baked `Exports_*` / `H2Exports_*` Excel columns, which assume a fixed
-selection.
+The `inputs/` databases are required (there is no Excel-column fallback).
+
+### Consolidated zone database
+`python build_zones_db.py` writes **`inputs/zones_2030.parquet`** — every sheet of
+every zone workbook in one long, lossless table
+(`zone, section, item, hour, value_num, value_str`): scalar sheets and technology
+characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`. It mirrors
+exactly what `data_loader` reads from the Excel files, as a single queryable file.
 
 ## Key assumptions (all tunable in `economic_dispatch/config.py`)
 
@@ -179,7 +184,8 @@ economic_dispatch/
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
-inputs/              crossborder result databases (parquet) + EXPORTS_CALCULATION.md
+build_zones_db.py    consolidate all zone workbooks -> inputs/zones_2030.parquet
+inputs/              crossborder + zone result databases (parquet) + EXPORTS_CALCULATION.md
 outputs/             results CSVs (generation, flows, storage, shedding, summary,
                      hourly per-tech balance)
 outputs/inputs/      per-node input data as the model resolved it (see below)

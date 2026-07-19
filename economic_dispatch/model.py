@@ -16,7 +16,6 @@ needed by report.py to extract and validate the solution.
 """
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 
 import linopy
@@ -410,31 +409,6 @@ def _profile_da(zdata, zones, hours, col) -> xr.DataArray:
                         dims=[ZONE, HOUR])
 
 
-def _external_exchange(zdata, zones, hours, prefix) -> xr.DataArray:
-    """Net fixed exchange with non-modelled neighbours, as a **net injection**
-    into the zone (import positive, export negative).
-
-    Sums every profile column starting with ``prefix`` per zone:
-      * "Exports"   -> electricity exchange (e.g. Exports_AT00_CH00)
-      * "H2Exports" -> hydrogen exchange   (e.g. H2Exports_AT00_IT00, H2Exports_DE00)
-    Note "H2Exports" does not start with "Exports", so the two never collide.
-
-    The columns use the directional convention "positive = export from the zone"
-    (matching the PLEXOS A->B crossborder sign), so we NEGATE the sum: a negative
-    column value is an import = inflow, which must add to the zone's supply.
-    """
-    rows = []
-    for z in zones:
-        prof = zdata[z].profiles
-        cols = [c for c in prof.columns if isinstance(c, str) and c.startswith(prefix)]
-        s = np.zeros(len(hours))
-        for c in cols:
-            s = s + _num(prof[c].to_numpy())
-        rows.append(-s)  # net injection: import (+), export (-)
-    return xr.DataArray(np.vstack(rows), coords={ZONE: pd.Index(zones, name=ZONE), HOUR: hours},
-                        dims=[ZONE, HOUR])
-
-
 def _h2_main_zones(zdata, zones) -> dict[str, str]:
     """Main H2 zone per country = the country's selected zone with the most H2 demand."""
     best: dict[str, str] = {}
@@ -453,18 +427,10 @@ def _external_exchange_all(zdata, zones, hours, cfg):
     """Return (external_e, external_h2) net-injection arrays (import +).
 
     Computed from the ``inputs/`` result databases so neighbours track the zone
-    selection; falls back to the Excel ``Exports_*`` columns if the databases are
-    missing or ``exports_from_db`` is off.
+    selection (see exports_loader / inputs/EXPORTS_CALCULATION.md).
     """
-    if cfg.exports_from_db:
-        try:
-            main_map = _h2_main_zones(zdata, zones)
-            return exports_loader.load_external_injection(cfg, zones, hours, main_map)
-        except FileNotFoundError:
-            warnings.warn("exports databases not found in inputs/; falling back to "
-                          "Excel Exports_* / H2Exports_* columns")
-    return (_external_exchange(zdata, zones, hours, "Exports"),
-            _external_exchange(zdata, zones, hours, "H2Exports"))
+    main_map = _h2_main_zones(zdata, zones)
+    return exports_loader.load_external_injection(cfg, zones, hours, main_map)
 
 
 def _flow_terms(m: linopy.Model, lines: list[Line], zones: list[str], hours: pd.Index, tag: str):
