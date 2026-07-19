@@ -26,7 +26,6 @@ def solve(build: BuildResult) -> str:
     status, condition = build.model.solve(
         solver_name=cfg.solver_name,
         mip_rel_gap=cfg.mip_rel_gap,
-        time_limit=cfg.time_limit_s,
     )
     print(f"Solver status: {status} ({condition})")
     return status

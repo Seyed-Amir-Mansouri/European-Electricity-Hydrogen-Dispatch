@@ -108,7 +108,6 @@ class RunConfig:
     # --- Solver ------------------------------------------------------------
     solver_name: str = "highs"
     mip_rel_gap: float = 1e-4
-    time_limit_s: float = 600.0
     recover_prices: bool = False       # fix commitment, re-solve LP for shadow prices
 
     def resolved_output_dir(self) -> Path:

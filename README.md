@@ -70,7 +70,6 @@ CLI flags:
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
 | `--no-prices` | skip the marginal-price computation (the extra LP re-solve) |
-| `--time-limit S` | solver time limit in seconds |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
 Results are written to `outputs/` and a balance-validation check prints at the

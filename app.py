@@ -26,7 +26,7 @@ def available_zones() -> list[str]:
 
 
 @st.cache_data(show_spinner=False)
-def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices, tlim):
+def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices):
     """Solve one scenario and return (tables, summary, validation, zones)."""
     cfg = RunConfig(start_day=start, end_day=end)
     cfg.zones = list(zones)
@@ -35,7 +35,6 @@ def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices, tl
     cfg.enable_reserves = reserves
     cfg.enable_h2_terminal = h2term
     cfg.compute_prices = prices
-    cfg.time_limit_s = tlim
     build = pipeline.solve_scenario(cfg)
     return report.hourly_balance_tables(build), report.validate(build), list(cfg.zones)
 
@@ -60,7 +59,6 @@ ramps = st.sidebar.checkbox("Ramp limits", True)
 reserves = st.sidebar.checkbox("Reserves (FCR/FRR)", False)
 h2term = st.sidebar.checkbox("H2 terminal imports", True)
 prices = st.sidebar.checkbox("Marginal prices", True)
-tlim = st.sidebar.number_input("Solver time limit (s)", 30, 1800, 600, step=30)
 go = st.sidebar.button("Run dispatch", type="primary", use_container_width=True)
 
 st.title("CORE Electricity + Hydrogen Dispatch")
@@ -73,7 +71,7 @@ if go:
         with st.spinner("Building & solving the MILP…"):
             st.session_state.result = run_scenario(
                 tuple(sorted(zones)), start, end,
-                storage, ramps, reserves, h2term, prices, tlim)
+                storage, ramps, reserves, h2term, prices)
 
 if "result" not in st.session_state:
     st.info("Set the scenario in the sidebar and click **Run dispatch**.")

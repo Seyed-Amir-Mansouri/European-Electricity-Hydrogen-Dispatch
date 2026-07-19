@@ -409,7 +409,7 @@ def marginal_prices(zdata, net, cfg, milp_build: BuildResult):
     """
     n_sol = milp_build.model.solution["n_units"].to_pandas()
     lp = build_model(zdata, net, cfg, fix_commit=n_sol)
-    lp.model.solve(solver_name=cfg.solver_name, time_limit=cfg.time_limit_s)
+    lp.model.solve(solver_name=cfg.solver_name)
     price_e = lp.model.constraints["elec_balance"].dual
     price_h = lp.model.constraints["h2_balance"].dual
     return price_e, price_h
