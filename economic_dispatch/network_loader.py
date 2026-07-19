@@ -18,13 +18,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import DEFAULT_DATA_DIR, DEFAULT_NETWORKS_DB
+from .config import DEFAULT_DATA_DIR, DEFAULT_NETWORKS_DB, DEFAULT_H2_REF
 
 SHEET_ELEC = "Electricity Lines"
 SHEET_H2 = "Hydrogen Pipelines"
 SHEET_DATA = "Data"
 _CARRIERS = [("electricity", SHEET_ELEC), ("hydrogen", SHEET_H2)]
 _CO2, _GAS = "CO2 Price (EUR/ton)", "Gas Price (EUR/MWh)"
+# Reference-grid interconnector-hub codes -> the country they represent.
+_H2_HUB_COUNTRY = {"IBIT": "IT", "IBFI": "FI"}
 
 
 @dataclass
@@ -77,16 +79,52 @@ def _read_lines_all(ws) -> list[tuple]:
     return rows
 
 
-def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NETWORKS_DB) -> Path:
-    """Convert Networks.xlsx to networks_2030.parquet (all lines + prices)."""
+def _h2_reference_caps(ref_path: Path) -> dict[tuple, float]:
+    """Directional H2 border capacities (GW) from ReferenceGrid_Hydrogen '2030'.
+
+    Returns {(countryA, countryB): GW A->B}. Border header ``A-B`` gives dir1 =
+    A->B and dir2 = B->A; interconnector-hub codes are mapped to their country.
+    """
+    import openpyxl
+    ref_path = Path(ref_path)
+    if not ref_path.exists():
+        return {}
+    wb = openpyxl.load_workbook(ref_path, read_only=True, data_only=True)
+    cap: dict[tuple, float] = {}
+    for border, d1, d2 in ((r[0], r[1], r[2]) for r in wb["2030"].iter_rows(min_row=2, values_only=True)):
+        if not isinstance(border, str) or "-" not in border:
+            continue
+        a, b = border.split("-", 1)
+        a, b = _H2_HUB_COUNTRY.get(a, a), _H2_HUB_COUNTRY.get(b, b)
+        try:
+            cap[(a, b)], cap[(b, a)] = float(d1), float(d2)
+        except (TypeError, ValueError):
+            pass
+    wb.close()
+    return cap
+
+
+def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NETWORKS_DB,
+                      h2_ref: Path = DEFAULT_H2_REF) -> Path:
+    """Convert Networks.xlsx to networks_2030.parquet (all lines + prices).
+
+    Hydrogen line capacities are overridden by ReferenceGrid_Hydrogen (GW x 1000
+    -> MW, direction-aligned) wherever the line's country pair has a reference
+    border; other lines keep their Networks.xlsx capacities.
+    """
     import openpyxl
     path = Path(data_dir) / "Networks.xlsx"
     if not path.exists():
         raise FileNotFoundError(f"Networks workbook not found: {path}")
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    rows = []
+    ref = _h2_reference_caps(h2_ref)
+    rows, overridden = [], 0
     for carrier, sheet in _CARRIERS:
         for frm, to, ft, tf, loss in _read_lines_all(wb[sheet]):
+            if carrier == "hydrogen" and (frm[:2], to[:2]) in ref:
+                ft = ref[(frm[:2], to[:2])] * 1000.0            # GW -> MW
+                tf = ref.get((to[:2], frm[:2]), 0.0) * 1000.0
+                overridden += 1
             rows.append(dict(carrier=carrier, frm=frm, to=to,
                              cap_from_to_mw=ft, cap_to_from_mw=tf, loss_fraction=loss))
     ws = wb[SHEET_DATA]
@@ -95,6 +133,8 @@ def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NET
                          cap_from_to_mw=float(ws.cell(2, col).value or 0.0),
                          cap_to_from_mw=None, loss_fraction=None))
     wb.close()
+    if ref:
+        print(f"  applied ReferenceGrid_Hydrogen to {overridden} H2 lines (GW x 1000)")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(out, index=False)

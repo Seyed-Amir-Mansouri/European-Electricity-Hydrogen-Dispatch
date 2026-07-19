@@ -4,3 +4,5 @@ Formulation.md
 inputs/*.parquet
 __pycache__/
 *.pyc
+
+inputs/*.xlsx

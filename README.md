@@ -116,7 +116,10 @@ columns use positive = export; a negative column value is an inflow = supply.)
 `Networks.xlsx` supplies the electricity & hydrogen line topology (directional
 MW limits + loss fractions) and global CO2 & gas prices — consolidated by
 `build_db.py` into `inputs/networks_2030.parquet`, which the model reads at
-runtime (filtering lines to the selected zones).
+runtime (filtering lines to the selected zones). Hydrogen line capacities are
+overridden from `inputs/ReferenceGrid_Hydrogen.xlsx` (the `2030` inter-country
+sheet, GW × 1000 → MW, direction-aligned) wherever a line's country pair has a
+reference border.
 
 ### Cross-border exchange from the result databases (`inputs/`)
 The fixed exchange with non-modelled neighbours is **computed on the fly** from
