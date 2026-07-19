@@ -1,8 +1,6 @@
 XLSXs/
 outputs/
 Formulation.md
-inputs/*.parquet
+inputs/*.xlsx
 __pycache__/
 *.pyc
-
-inputs/*.xlsx
