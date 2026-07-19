@@ -2,8 +2,6 @@
   <img src="Power-Hydrogen%20Co-Dispatch%20Overview.png" alt="Power-Hydrogen Co-Dispatch Overview" width="760">
 </p>
 
-# Coupled Electricity + Hydrogen Economic Dispatch
-
 A **MILP unit-commitment economic dispatch** over the **Central-European CORE
 region** — the database covers the 23 ENTSO-E bidding zones of the 13 CORE
 Capacity-Calculation-Region countries (AT, BE, CZ, DE, FR, HR, HU, LU, NL, PL,
