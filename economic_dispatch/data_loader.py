@@ -35,7 +35,7 @@ class ZoneData:
     capacities: dict[str, float]      # technology -> installed MW
     storage_energy: dict[str, float]  # technology -> energy MWh
     reserves: dict[str, float]        # requirement -> MW
-    gas_h2: dict[str, float]          # asset -> MW
+    h2_assets: dict[str, float]       # hydrogen terminal / storage -> MW
     char: pd.DataFrame                # indexed by Technology
     profiles: pd.DataFrame            # 24 rows (chosen day), profile columns
 
@@ -124,15 +124,18 @@ def load_zone(code: str, data_dir: Path, hour_start: int, hour_end: int) -> Zone
     capacities = _read_kv_ws(wb[S_CAP])
     storage_energy = _read_kv_ws(wb[S_STO])
     reserves = _read_kv_ws(wb[S_RES])
-    gas_h2 = _read_kv_ws(wb[S_GH])
+    # Keep only the hydrogen assets — the gas system is out of scope.
+    h2_assets = {k: v for k, v in _read_kv_ws(wb[S_GH]).items() if "(Gas)" not in k}
 
     char = _read_table_ws(wb[S_CHAR])
     char = char.set_index(char.columns[0])  # index by Technology
 
     profiles = _read_table_ws(wb[S_PROF], hour_start, hour_end).reset_index(drop=True)
+    profiles = profiles.drop(columns=[c for c in profiles.columns if c == "Gas Demand Profile"],
+                             errors="ignore")
 
     wb.close()
-    return ZoneData(code, capacities, storage_energy, reserves, gas_h2, char, profiles)
+    return ZoneData(code, capacities, storage_energy, reserves, h2_assets, char, profiles)
 
 
 # --- Load from the consolidated parquet database ---------------------------
@@ -163,7 +166,7 @@ def _zone_from_db(zdf: pd.DataFrame, code: str, h0: int, h1: int) -> ZoneData:
     prof = prof.iloc[h0:h1].reset_index(drop=True)
 
     return ZoneData(code, scalar("capacities"), scalar("storage_energy"),
-                    scalar("reserves"), scalar("gas_h2"), char, prof)
+                    scalar("reserves"), scalar("h2_assets"), char, prof)
 
 
 def load_zones_from_db(codes: list[str], db_path: Path,

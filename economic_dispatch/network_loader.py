@@ -1,7 +1,7 @@
 """Transport lines + global price scalars, from the networks parquet database.
 
 ``build_networks_db`` converts ``Networks.xlsx`` to ``networks_2030.parquet``
-(all lines of both carriers, losses already resolved, plus the CO2/gas prices);
+(all lines of both carriers, losses already resolved, plus the CO2 price);
 ``load_networks`` reads that database and filters the lines to the selected
 zones. At runtime only the parquet is needed — not the Excel file.
 
@@ -24,7 +24,7 @@ SHEET_ELEC = "Electricity Lines"
 SHEET_H2 = "Hydrogen Pipelines"
 SHEET_DATA = "Data"
 _CARRIERS = [("electricity", SHEET_ELEC), ("hydrogen", SHEET_H2)]
-_CO2, _GAS = "CO2 Price (EUR/ton)", "Gas Price (EUR/MWh)"
+_CO2 = "CO2 Price (EUR/ton)"
 # Reference-grid interconnector-hub codes -> the country they represent.
 _H2_HUB_COUNTRY = {"IBIT": "IT", "IBFI": "FI"}
 
@@ -43,7 +43,6 @@ class NetworkData:
     elec: list[Line]
     hydrogen: list[Line]
     co2_price: float      # EUR/ton
-    gas_price: float      # EUR/MWh
 
 
 # --------------------------------------------------------------------------- #
@@ -128,10 +127,9 @@ def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NET
             rows.append(dict(carrier=carrier, frm=frm, to=to,
                              cap_from_to_mw=ft, cap_to_from_mw=tf, loss_fraction=loss))
     ws = wb[SHEET_DATA]
-    for name, col in [(_CO2, 1), (_GAS, 2)]:
-        rows.append(dict(carrier="prices", frm=name, to=None,
-                         cap_from_to_mw=float(ws.cell(2, col).value or 0.0),
-                         cap_to_from_mw=None, loss_fraction=None))
+    rows.append(dict(carrier="prices", frm=_CO2, to=None,
+                     cap_from_to_mw=float(ws.cell(2, 1).value or 0.0),
+                     cap_to_from_mw=None, loss_fraction=None))
     wb.close()
     if ref:
         print(f"  applied ReferenceGrid_Hydrogen to {overridden} H2 lines (GW x 1000)")
@@ -163,4 +161,4 @@ def load_networks(zones: list[str], db_path: Path = DEFAULT_NETWORKS_DB) -> Netw
 
     prices = df[df["carrier"] == "prices"].set_index("frm")["cap_from_to_mw"].to_dict()
     return NetworkData(lines_for("electricity"), lines_for("hydrogen"),
-                       float(prices.get(_CO2, 0.0)), float(prices.get(_GAS, 0.0)))
+                       float(prices.get(_CO2, 0.0)))

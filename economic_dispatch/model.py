@@ -203,8 +203,8 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
              cfg.default_pump_efficiency, "electricity"),
         ]
         if cfg.enable_h2_storage:
-            wd = zd.gas_h2.get("Withdraw (Hydrogen) (MW)", 0.0)      # discharge power
-            inj = zd.gas_h2.get("Injection (Hydrogen) (MW)", 0.0)   # charge power
+            wd = zd.h2_assets.get("Withdraw (Hydrogen) (MW)", 0.0)      # discharge power
+            inj = zd.h2_assets.get("Injection (Hydrogen) (MW)", 0.0)   # charge power
             specs.append(("H2 storage", wd, inj, wd * cfg.h2_storage_hours, zero,
                           cfg.h2_storage_efficiency, "hydrogen"))
         for kind, pdis, pchg, ecap, inf, eff, carrier in specs:
@@ -318,7 +318,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig) ->
     ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
 
     if cfg.enable_h2_terminal:
-        term_cap = np.array([zdata[z].gas_h2.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
+        term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
     else:
         term_cap = np.zeros(len(zones))
     term_h2 = m.add_variables(lower=0.0, upper=_bc_z(term_cap, zidx, hours), name="term_h2")
