@@ -1,7 +1,10 @@
-"""Consolidate every zone workbook into a single Parquet database.
+"""Build the input Parquet databases from the Excel files.
 
-Reads all zone Excel files (via ``data_loader``) and writes
-``inputs/zones_2030.parquet`` in a long, lossless format:
+Writes ``inputs/networks_2030.parquet`` (line topology + prices) and
+``inputs/zones_2030.parquet`` (all per-zone data). After building, the model
+runs entirely from ``inputs/`` and no longer needs the ``XLSXs/`` folder.
+
+The zone database is a long, lossless format:
 
     zone | section | item | hour | value_num | value_str
 
@@ -19,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from economic_dispatch import data_loader as dl
+from economic_dispatch import network_loader as nl
 from economic_dispatch.config import DEFAULT_DATA_DIR, DEFAULT_EXPORTS_DIR, discover_zones, HOURS_PER_YEAR
 
 COLS = ["zone", "section", "item", "hour", "value_num", "value_str"]
@@ -82,4 +86,6 @@ def build(data_dir=DEFAULT_DATA_DIR, out=None):
 
 
 if __name__ == "__main__":
+    net_out = nl.build_networks_db()
+    print(f"Wrote {net_out}")
     build()

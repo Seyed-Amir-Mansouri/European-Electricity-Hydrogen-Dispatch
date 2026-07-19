@@ -13,17 +13,18 @@ Dependencies live in the shared `projects-venv`; code lives here in `Project 1/`
 ```bash
 # from Project 1/
 "../projects-venv/Scripts/pip.exe" install -r requirements.txt   # first time only
-"../projects-venv/Scripts/python.exe" build_zones_db.py                        # first time / when XLSXs change
+"../projects-venv/Scripts/python.exe" build_db.py                              # first time / when XLSXs change
 "../projects-venv/Scripts/python.exe" run_dispatch.py                          # all zones, day 1
 "../projects-venv/Scripts/python.exe" run_dispatch.py --zones DE00,FR00 --day 10       # a single day
 "../projects-venv/Scripts/python.exe" run_dispatch.py --start-day 10 --end-day 16      # a 7-day horizon
 "../projects-venv/Scripts/python.exe" run_dispatch.py --no-ramps --reserves
 ```
 
-Zone data is read at runtime from **`inputs/zones_2030.parquet`** (built by
-`build_zones_db.py` from the `XLSXs/` workbooks); `Networks.xlsx` still supplies
-the line topology and CO₂/gas prices. Rebuild the database whenever the zone
-workbooks change.
+At runtime everything is read from the **`inputs/` parquet databases** —
+`zones_2030.parquet` (per-zone data) and `networks_2030.parquet` (line topology +
+CO₂/gas prices) — both built by `build_db.py` from the `XLSXs/` workbooks. **The
+`XLSXs/` folder is only needed to (re)build the databases, not to run the model.**
+Rebuild whenever the workbooks change.
 
 CLI flags:
 
@@ -113,7 +114,9 @@ columns use positive = export; a negative column value is an inflow = supply.)
 | Gas & Hydrogen Assets | hydrogen terminal / storage capacities |
 
 `Networks.xlsx` supplies the electricity & hydrogen line topology (directional
-MW limits + loss fractions) and global CO2 & gas prices.
+MW limits + loss fractions) and global CO2 & gas prices — consolidated by
+`build_db.py` into `inputs/networks_2030.parquet`, which the model reads at
+runtime (filtering lines to the selected zones).
 
 ### Cross-border exchange from the result databases (`inputs/`)
 The fixed exchange with non-modelled neighbours is **computed on the fly** from
@@ -128,7 +131,7 @@ method is specified in [`inputs/EXPORTS_CALCULATION.md`](inputs/EXPORTS_CALCULAT
 The `inputs/` databases are required (there is no Excel-column fallback).
 
 ### Consolidated zone database
-`python build_zones_db.py` writes **`inputs/zones_2030.parquet`** — every sheet of
+`python build_db.py` writes **`inputs/zones_2030.parquet`** — every sheet of
 every zone workbook in one long, lossless table
 (`zone, section, item, hour, value_num, value_str`): scalar sheets and technology
 characteristics at `hour = -1`, hourly profiles at `hour = 0..8735`. **This is the
@@ -186,13 +189,13 @@ per-zone Excel files. The workbooks are only needed to (re)build the database.
 economic_dispatch/
   config.py          run settings & tunable assumptions
   data_loader.py     parse a zone workbook + technology classification
-  network_loader.py  parse Networks.xlsx
+  network_loader.py  build/load the networks parquet database
   model.py           build the linopy MILP
   exports_loader.py  compute cross-border exchange from the inputs/ databases
   solve.py           run HiGHS
   report.py          extract, validate balances, write CSVs
 run_dispatch.py      CLI entry point
-build_zones_db.py    consolidate all zone workbooks -> inputs/zones_2030.parquet
+build_db.py          XLSXs/ -> inputs/zones_2030.parquet + networks_2030.parquet
 inputs/              crossborder + zone result databases (parquet) + EXPORTS_CALCULATION.md
 outputs/             results CSVs (generation, flows, storage, shedding, summary,
                      hourly per-tech balance)

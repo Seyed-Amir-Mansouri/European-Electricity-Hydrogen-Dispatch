@@ -26,6 +26,7 @@ DEFAULT_DATA_DIR = PROJECT_ROOT / "XLSXs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "inputs"
 DEFAULT_ZONES_DB = DEFAULT_EXPORTS_DIR / "zones_2030.parquet"
+DEFAULT_NETWORKS_DB = DEFAULT_EXPORTS_DIR / "networks_2030.parquet"
 
 HOURS_PER_DAY = 24
 HOURS_PER_YEAR = 8736  # 364 days * 24
@@ -64,6 +65,7 @@ class RunConfig:
     output_dir: Path = DEFAULT_OUTPUT_DIR
     exports_dir: Path = DEFAULT_EXPORTS_DIR   # inputs/ result databases (parquet)
     zones_db: Path = DEFAULT_ZONES_DB         # consolidated zone data (parquet)
+    networks_db: Path = DEFAULT_NETWORKS_DB   # line topology + prices (parquet)
     out_tag: str | None = None         # write to outputs/<out_tag>/ to keep runs side by side
 
     # --- Feature flags -----------------------------------------------------

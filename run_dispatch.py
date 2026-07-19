@@ -78,7 +78,7 @@ def run(cfg: RunConfig) -> model.BuildResult:
 
     t = time.time()
     zdata = data_loader.load_zones_from_db(cfg.zones, cfg.zones_db, h0, h1)
-    net = network_loader.load_networks(cfg.data_dir, cfg.zones)
+    net = network_loader.load_networks(cfg.zones, cfg.networks_db)
     print(f"Loaded {len(zdata)} zones, {len(net.elec)} elec lines, "
           f"{len(net.hydrogen)} H2 lines  ({time.time() - t:.1f}s)  "
           f"CO2={net.co2_price} EUR/t, gas={net.gas_price} EUR/MWh")
