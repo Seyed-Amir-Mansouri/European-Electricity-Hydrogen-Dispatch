@@ -272,9 +272,18 @@ def hourly_balance_tables(build: BuildResult) -> dict:
     dem_e, dem_h = da_rows(build.demand_e), da_rows(build.demand_h)
     ext_e, ext_h = da_rows(build.external_e), da_rows(build.external_h2)
     ely_prod = _ely_production(build, sol)
-    # Zonal marginal prices (balance duals), EUR/MWh, if computed.
-    price_e = da_rows(build.price_e) if getattr(build, "price_e", None) is not None else None
-    price_h = da_rows(build.price_h) if getattr(build, "price_h", None) is not None else None
+    # Zonal marginal prices (balance duals), EUR/MWh, if computed. Blank the
+    # degenerate duals of empty nodes (no demand/gen/lines): they pin at the VOLL
+    # bound with no actual shedding, so a price >= VOLL where shed == 0 is not a
+    # real scarcity price and is set to NaN.
+    voll = build.cfg.voll_eur_per_mwh
+    price_e = price_h = None
+    if getattr(build, "price_e", None) is not None:
+        price_e = da_rows(build.price_e).mask(
+            (da_rows(build.price_e).abs() >= 0.99 * voll) & (shed_e.abs() <= 1e-6))
+    if getattr(build, "price_h", None) is not None:
+        price_h = da_rows(build.price_h).mask(
+            (da_rows(build.price_h).abs() >= 0.99 * voll) & (shed_h.abs() <= 1e-6))
 
     # H2 consumed by H2-fired plants, per zone
     h2 = build.gens[build.gens["h2_fuel"]]

@@ -98,4 +98,6 @@ categories of each row sum to ~0 (the nodal balance holds).
 **Marginal Price (EUR/MWh)** is the zonal price — the dual of the nodal balance.
 Because duals need an LP, the model fixes the integer commitment to its MILP
 optimum and re-solves as an LP to read the balance shadow prices (skip this extra
-solve with `--no-prices`).
+solve with `--no-prices`). Empty nodes (no demand, generation, or lines) have a
+degenerate dual that pins at the shedding penalty, so a price at that penalty
+with no actual shedding is treated as undefined and left blank.
