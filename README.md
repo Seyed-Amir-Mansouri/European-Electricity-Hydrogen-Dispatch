@@ -1,9 +1,11 @@
 # Coupled Electricity + Hydrogen Economic Dispatch
 
-A **MILP unit-commitment economic dispatch** over ENTSO-E-style bidding zones,
-coupling two energy carriers — **electricity** and **hydrogen** — using
-[linopy](https://linopy.readthedocs.io) + the open-source **HiGHS** solver. The
-horizon is a whole number of days (default one day = 24 hours; use
+A **MILP unit-commitment economic dispatch** over the **Central-European CORE
+region** — the database covers the 23 ENTSO-E bidding zones of the 13 CORE
+Capacity-Calculation-Region countries (AT, BE, CZ, DE, FR, HR, HU, LU, NL, PL,
+RO, SI, SK) — coupling two energy carriers, **electricity** and **hydrogen**,
+using [linopy](https://linopy.readthedocs.io) + the open-source **HiGHS** solver.
+The horizon is a whole number of days (default one day = 24 hours; use
 `--start-day/--end-day` for multi-day runs). All data is the **ENTSO-E TYNDP
 National Trends 2030 (NT2030)** scenario, supplied as the parquet databases in
 `inputs/`.
