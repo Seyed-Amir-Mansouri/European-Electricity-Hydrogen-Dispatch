@@ -111,9 +111,7 @@ def run(cfg: RunConfig) -> model.BuildResult:
 
     out_dir = cfg.resolved_output_dir()
     report.write_outputs(build, out_dir)
-    report.write_inputs(build, out_dir)
     print(f"\nOutputs written to {out_dir}")
-    print(f"Node input data written to {out_dir / 'inputs'}")
     return build
 
 

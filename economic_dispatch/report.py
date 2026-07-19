@@ -226,31 +226,7 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
         except OSError as e:
             print(f"  warning: could not remove {old.name} ({e.strerror}); "
                   f"close it if open in another program")
-    sol = extract(build)
-
-    # Generation by technology (long form): zone, tech, hour, MW
-    gp = sol["gen_p"]
-    if not gp.empty:
-        long = gp.copy()
-        long.index = pd.MultiIndex.from_tuples(
-            [tuple(g.split("|", 1)) for g in long.index], names=["zone", "tech"])
-        long = long.reset_index().melt(id_vars=["zone", "tech"], var_name="hour", value_name="MW")
-        long.to_csv(out_dir / "generation_by_tech.csv", index=False)
-
-    for name in ["soc", "dis", "ch", "ely_p", "term_h2", "shed_e", "shed_h", "n_units"]:
-        df = sol[name]
-        if not df.empty:
-            df.to_csv(out_dir / f"{name}.csv")
-
-    # Network flows
-    for tag, lines in [("e", build.elines), ("h", build.hlines)]:
-        if lines:
-            fpos = build.model.solution[f"f{tag}_pos"].to_pandas()
-            fneg = build.model.solution[f"f{tag}_neg"].to_pandas()
-            net = fpos - fneg
-            net.to_csv(out_dir / f"flows_{'elec' if tag == 'e' else 'h2'}.csv")
-
-    pd.Series(summary(build)).to_csv(out_dir / "summary.csv")
+    # The only outputs are the hourly per-technology balance CSVs (elec & H2).
     write_hourly_balance(build, out_dir)
 
 
