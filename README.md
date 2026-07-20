@@ -72,6 +72,7 @@ CLI flags:
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
 | `--no-prices` | skip the marginal-price computation (the extra LP re-solve) |
+| `--rolling-days N` | solve a long horizon in `N`-day rolling blocks (see below) |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
 Results are written to `outputs/` and a balance-validation check prints at the
@@ -92,6 +93,27 @@ python run_dispatch.py --day 200 --out-tag summer_day
 Multi-day runs build a larger MILP (constraints scale with the number of hours);
 storage state-of-charge is cyclic over the **whole** horizon and must-run uses
 the first day's month.
+
+### Long horizons (a month or a full year)
+
+A monolithic MILP over hundreds or thousands of hours becomes too large to solve
+directly (the full 8736-hour year has ~4 M rows — the root LP relaxation alone
+never finishes on a typical machine). For horizons beyond a couple of weeks, use
+**rolling-horizon** decomposition: the run is split into consecutive day-blocks,
+each solved as its own MILP, with **storage state-of-charge carried forward** from
+one block to the next (storage is not forced cyclic within a block). The
+per-block balance tables are stitched into the same two full-horizon CSVs.
+
+```bash
+# full year in weekly blocks (52 blocks); skip prices for speed
+python run_dispatch.py --start-day 1 --end-day 364 --rolling-days 7 --no-prices
+```
+
+A weekly block solves in tens of seconds, so a full year completes in roughly
+half an hour rather than hanging indefinitely. Smaller blocks are faster and use
+less memory but see less of the future (e.g. a battery cannot arbitrage across a
+block boundary); a week is a good default. The Streamlit UI exposes the same
+control as **Rolling block (days)** in the sidebar (`0` = solve monolithically).
 
 **Zones default to every zone in the database.** Selecting a subset with
 `--zones` automatically reclassifies each border: a line between two selected

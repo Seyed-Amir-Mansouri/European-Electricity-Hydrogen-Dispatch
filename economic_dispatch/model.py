@@ -240,7 +240,8 @@ def _incidence(members: pd.Series, zones: list[str], dim: str) -> xr.DataArray:
 
 
 def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
-                fix_commit: pd.Series | None = None) -> BuildResult:
+                fix_commit: pd.Series | None = None, relax_commit: bool = False,
+                soc_init: pd.Series | None = None, cyclic: bool | None = None) -> BuildResult:
     zones = cfg.zones
     H = len(zdata[zones[0]].profiles)
     hours = pd.Index(range(H), name=HOUR)
@@ -264,14 +265,17 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     commit = gens[gens["category"] == dl.CAT_COMMIT].copy()
     cidx = commit.index
     n_upper = xr.DataArray(commit["units"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    if fix_commit is None:
-        n = m.add_variables(lower=0.0, upper=n_upper, integer=True, coords=[cidx], name="n_units")
-    else:
-        # LP relaxation with commitment fixed to its MILP optimum, so the solver
-        # returns constraint duals (marginal prices).
+    if fix_commit is not None:
+        # LP with commitment fixed to its MILP optimum, so the solver returns
+        # constraint duals (marginal prices).
         fixed = xr.DataArray(fix_commit.reindex(cidx).fillna(0.0).to_numpy(float),
                              coords={GEN: cidx}, dims=[GEN])
         n = m.add_variables(lower=fixed, upper=fixed, name="n_units")
+    elif relax_commit:
+        # Continuous (LP-relaxed) commitment — pure LP, solvable by IPM/PDLP.
+        n = m.add_variables(lower=0.0, upper=n_upper, coords=[cidx], name="n_units")
+    else:
+        n = m.add_variables(lower=0.0, upper=n_upper, integer=True, coords=[cidx], name="n_units")
 
     pmin = xr.DataArray(commit["pmin_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
     pmax = xr.DataArray(commit["pmax_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
@@ -306,7 +310,12 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         dis_h2_by_zone = (A_sto * mask_h * dis).sum(STO)
         ch_h2_by_zone = (A_sto * mask_h * ch).sum(STO)
 
-        soc_init = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
+        default_init = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
+        if soc_init is None:
+            soc0 = default_init
+        else:  # rolling horizon: carry the previous block's end-of-block SoC
+            soc0 = pd.Series(soc_init).reindex(sidx).fillna(
+                pd.Series(default_init, index=sidx)).to_numpy(float)
         inflow_mat = np.vstack([sinflow[s] for s in sidx])            # (sto, H)
         eff_da = xr.DataArray(eff, coords={STO: sidx}, dims=[STO])
         # One vectorised recursion instead of a per-hour loop:
@@ -314,12 +323,12 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         # ``soc.shift(hour=1)`` is empty at h=0, so inject the initial SoC into
         # the RHS only there (where "soc[h-1]" would otherwise be the start value).
         rhs_mat = inflow_mat.copy()
-        rhs_mat[:, 0] = rhs_mat[:, 0] + soc_init
+        rhs_mat[:, 0] = rhs_mat[:, 0] + soc0
         rhs = xr.DataArray(rhs_mat, coords={STO: sidx, HOUR: hours}, dims=[STO, HOUR])
         m.add_constraints(soc - soc.shift({HOUR: 1}) - eff_da * ch + dis + spill == rhs,
                           name="soc_balance")
-        if cfg.cyclic_storage:
-            end = xr.DataArray(soc_init, coords={STO: sidx}, dims=[STO])
+        if cfg.cyclic_storage if cyclic is None else cyclic:
+            end = xr.DataArray(soc0, coords={STO: sidx}, dims=[STO])
             m.add_constraints(soc.sel({HOUR: H - 1}) == end, name="soc_cyclic")
     else:
         dis_by_zone = ch_by_zone = 0.0

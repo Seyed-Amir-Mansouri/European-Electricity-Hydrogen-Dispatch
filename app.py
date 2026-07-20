@@ -26,8 +26,8 @@ def available_zones() -> list[str]:
 
 
 @st.cache_data(show_spinner=False)
-def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices):
-    """Solve one scenario and return (tables, summary, validation, zones)."""
+def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices, rolling):
+    """Solve one scenario and return (tables, ok, zones)."""
     cfg = RunConfig(start_day=start, end_day=end)
     cfg.zones = list(zones)
     cfg.enable_storage = storage
@@ -35,8 +35,13 @@ def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices):
     cfg.enable_reserves = reserves
     cfg.enable_h2_terminal = h2term
     cfg.compute_prices = prices
+    if rolling > 0:
+        res = pipeline.solve_rolling(cfg, rolling, verbose=False)
+        return {"elec": res["elec"], "h2": res["h2"]}, res["ok"], list(cfg.zones)
     build = pipeline.solve_scenario(cfg)
-    return report.hourly_balance_tables(build), report.validate(build), list(cfg.zones)
+    val = report.validate(build)
+    ok = val["max_elec_residual"] < val["tol"] and val["max_h2_residual"] < val["tol"]
+    return report.hourly_balance_tables(build), ok, list(cfg.zones)
 
 
 # --------------------------------------------------------------------------- #
@@ -59,6 +64,11 @@ ramps = st.sidebar.checkbox("Ramp limits", True)
 reserves = st.sidebar.checkbox("Reserves (FCR/FRR)", False)
 h2term = st.sidebar.checkbox("H2 terminal imports", True)
 prices = st.sidebar.checkbox("Marginal prices", True)
+rolling = st.sidebar.number_input(
+    "Rolling block (days, 0 = off)", 0, 60, 0, step=1,
+    help="For long horizons (a month or a full year) the monolithic MILP is "
+         "too large to solve. Set a block size (e.g. 7) to solve the horizon "
+         "in day-blocks, carrying storage state forward.")
 go = st.sidebar.button("Run dispatch", type="primary", use_container_width=True)
 
 st.title("CORE Electricity + Hydrogen Dispatch")
@@ -71,18 +81,16 @@ if go:
         with st.spinner("Building & solving the MILP…"):
             st.session_state.result = run_scenario(
                 tuple(sorted(zones)), start, end,
-                storage, ramps, reserves, h2term, prices)
+                storage, ramps, reserves, h2term, prices, int(rolling))
 
 if "result" not in st.session_state:
     st.info("Set the scenario in the sidebar and click **Run dispatch**.")
     st.stop()
 
-tables, val, solved_zones = st.session_state.result
+tables, ok, solved_zones = st.session_state.result
 elec, h2 = tables["elec"], tables["h2"]
-ok = val["max_elec_residual"] < val["tol"] and val["max_h2_residual"] < val["tol"]
 (st.success if ok else st.error)(
-    f"Solved {len(solved_zones)} zones · balances {'closed' if ok else 'FAILED'} "
-    f"(elec {val['max_elec_residual']:.1e}, H2 {val['max_h2_residual']:.1e} MW)")
+    f"Solved {len(solved_zones)} zones · balances {'closed' if ok else 'FAILED'}")
 
 tab_gen, tab_price, tab_tables = st.tabs(
     ["Generation stack", "Marginal prices", "Balance tables"])

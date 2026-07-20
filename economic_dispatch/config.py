@@ -109,6 +109,7 @@ class RunConfig:
     solver_name: str = "highs"
     mip_rel_gap: float = 1e-4
     recover_prices: bool = False       # fix commitment, re-solve LP for shadow prices
+    rolling_block_days: int = 0        # >0: rolling-horizon solve in day-blocks (long horizons)
 
     def resolved_output_dir(self) -> Path:
         """Output folder for this run: outputs/ or outputs/<out_tag>/ if tagged."""

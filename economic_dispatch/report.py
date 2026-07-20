@@ -232,8 +232,18 @@ def write_outputs(build: BuildResult, out_dir: Path) -> None:
 
 def write_hourly_balance(build: BuildResult, out_dir: Path) -> None:
     """Write the hourly per-technology balance tables (elec & H2) to CSV."""
+    write_balance_tables(hourly_balance_tables(build), Path(out_dir))
+
+
+def write_balance_tables(tables: dict, out_dir: Path) -> None:
+    """Clean-slate write the two balance tables to ``out_dir`` as CSVs."""
     out_dir = Path(out_dir)
-    tables = hourly_balance_tables(build)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for old in out_dir.glob("*.csv"):
+        try:
+            old.unlink()
+        except OSError as e:
+            print(f"  warning: could not remove {old.name} ({e.strerror})")
     tables["elec"].to_csv(out_dir / "hourly_balance_elec.csv")
     tables["h2"].to_csv(out_dir / "hourly_balance_h2.csv")
 
