@@ -25,7 +25,6 @@ def _sol(build: BuildResult, name: str) -> pd.DataFrame:
 def extract(build: BuildResult) -> dict[str, pd.DataFrame]:
     return {
         "gen_p": _sol(build, "gen_p"),
-        "n_units": _sol(build, "n_units"),
         "dis": _sol(build, "dis"),
         "ch": _sol(build, "ch"),
         "soc": _sol(build, "soc"),

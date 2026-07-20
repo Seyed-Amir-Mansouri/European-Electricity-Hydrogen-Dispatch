@@ -1,4 +1,4 @@
-"""Build the coupled electricity + hydrogen dispatch MILP with linopy.
+"""Build the coupled electricity + hydrogen dispatch LP with linopy.
 
 Design
 ------
@@ -6,8 +6,11 @@ Design
   across all zones, plus indices for storage, electrolysers, and network lines.
 * Zone balances are assembled with incidence DataArrays (``A[gen, zone]``) via
   ``(A * var).sum("gen")`` — fully vectorised over zones and hours.
-* Inherently sequential constraints (ramps, storage state-of-charge) loop over
-  the 24 hours; everything else is vectorised.
+* The model is a pure LP: thermal fleets dispatch continuously between a
+  must-run floor and capacity (no integer commitment), and a small storage
+  throughput cost forbids simultaneous charge/discharge without a binary.
+* Inter-temporal constraints (ramps, storage state-of-charge) are expressed as
+  vectorised recursions with ``.shift()``; everything else is vectorised too.
 * Bidirectional lines are split into two non-negative flow variables so that the
   fractional line loss can be applied on the receiving end unambiguously.
 
@@ -50,7 +53,7 @@ class BuildResult:
     zones: list[str]
     hours: pd.Index
     gens: pd.DataFrame          # indexed by gen_id: zone, tech, category, mc, ...
-    commit: pd.DataFrame        # subset of gens that are unit-committed
+    commit: pd.DataFrame        # subset of gens = dispatchable thermal fleets (must-run floor)
     storage: pd.DataFrame       # indexed by sto_id
     gen_upper: xr.DataArray     # (gen, hour) available capacity
     demand_e: xr.DataArray      # (zone, hour)
@@ -111,6 +114,14 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 ramp_dn = zd.char_val(tech, "Ramp-Down Rate (MW/h)", 0.0)
                 mustrun = zd.must_run_units(tech, month)
                 mustrun = float(min(max(mustrun, 0.0), max_units))
+                # Pure-LP dispatch (no commitment binary): instead of
+                # n*Pmin <= p <= n*Pmax with integer n, the fleet output floats
+                # between a fixed floor and its capacity. A tech with a must-run
+                # requirement keeps ``mustrun`` units online at their minimum
+                # stable power, so its floor is max(min-stable, must-run) held
+                # online = mustrun * pmin_unit; a tech with no must-run can idle
+                # at 0. (mustrun is a monthly unit count from the data.)
+                pmin_floor = mustrun * pmin_unit
                 # Missing/zero efficiency -> use the default (avoids a 1/eff = 1e6
                 # coefficient in the H2 balance that ruins the LP conditioning).
                 eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
@@ -122,7 +133,7 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                     units=max_units, pmin_unit=pmin_unit, pmax_unit=pmax_unit,
                     ramp_up=ramp_pu * units * cfg.ramp_scale,
                     ramp_dn=ramp_dn * units * cfg.ramp_scale,
-                    mustrun=mustrun, pmax=cap,
+                    mustrun=mustrun, pmin_floor=pmin_floor, pmax=cap,
                 ))
                 upper[gid] = np.full(H, cap, dtype=float)
 
@@ -240,7 +251,6 @@ def _incidence(members: pd.Series, zones: list[str], dim: str) -> xr.DataArray:
 
 
 def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
-                fix_commit: pd.Series | None = None, relax_commit: bool = False,
                 soc_init: pd.Series | None = None, cyclic: bool | None = None) -> BuildResult:
     zones = cfg.zones
     H = len(zdata[zones[0]].profiles)
@@ -252,40 +262,24 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     m = linopy.Model()
 
-    # ---- generation ------------------------------------------------------ #
+    # ---- generation (pure LP, no commitment binary) ---------------------- #
+    # Each fleet's output floats between a fixed floor and its available
+    # capacity. The floor is the must-run minimum (mustrun units held at their
+    # minimum stable power); resources with no must-run requirement have a zero
+    # floor, so there is no need for an integer on/off variable.
     gen_index = gens.index
     upper_mat = np.vstack([gupper[g] for g in gen_index])
     gen_upper = xr.DataArray(upper_mat, coords={GEN: gen_index, HOUR: hours}, dims=[GEN, HOUR])
-    gen_p = m.add_variables(lower=0.0, upper=gen_upper, name="gen_p")
+    floor_vec = np.nan_to_num(gens["pmin_floor"].to_numpy(float)) \
+        if "pmin_floor" in gens.columns else np.zeros(len(gen_index))
+    gen_lower = xr.DataArray(floor_vec, coords={GEN: gen_index}, dims=[GEN])
+    gen_p = m.add_variables(lower=gen_lower, upper=gen_upper, name="gen_p")
 
     A_gen = _incidence(gens["zone"], zones, GEN)
     gen_by_zone = (A_gen * gen_p).sum(GEN)
 
-    # ---- unit commitment (integer) -------------------------------------- #
     commit = gens[gens["category"] == dl.CAT_COMMIT].copy()
     cidx = commit.index
-    n_upper = xr.DataArray(commit["units"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    if fix_commit is not None:
-        # LP with commitment fixed to its MILP optimum, so the solver returns
-        # constraint duals (marginal prices).
-        fixed = xr.DataArray(fix_commit.reindex(cidx).fillna(0.0).to_numpy(float),
-                             coords={GEN: cidx}, dims=[GEN])
-        n = m.add_variables(lower=fixed, upper=fixed, name="n_units")
-    elif relax_commit:
-        # Continuous (LP-relaxed) commitment — pure LP, solvable by IPM/PDLP.
-        n = m.add_variables(lower=0.0, upper=n_upper, coords=[cidx], name="n_units")
-    else:
-        n = m.add_variables(lower=0.0, upper=n_upper, integer=True, coords=[cidx], name="n_units")
-
-    pmin = xr.DataArray(commit["pmin_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    pmax = xr.DataArray(commit["pmax_unit"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    gp_c = gen_p.sel({GEN: cidx})
-    m.add_constraints(gp_c - n * pmax <= 0, name="commit_max")
-    m.add_constraints(gp_c - n * pmin >= 0, name="commit_min")
-    mustrun = commit["mustrun"].to_numpy(float)
-    if mustrun.max() > 0:
-        mr = xr.DataArray(mustrun, coords={GEN: cidx}, dims=[GEN])
-        m.add_constraints(n >= mr, name="must_run")
 
     # ---- storage --------------------------------------------------------- #
     have_sto = cfg.enable_storage and len(storage) > 0
@@ -395,13 +389,19 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     # ---- reserves (optional) -------------------------------------------- #
     if cfg.enable_reserves:
-        _add_reserves(m, zdata, zones, hours, gens, commit, gen_p, n, pmax)
+        _add_reserves(m, zdata, zones, hours, commit, gen_p)
 
     # ---- objective ------------------------------------------------------- #
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
     obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
         + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
         + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum())
+    # A small per-MWh throughput cost on every storage device makes charging and
+    # discharging in the same hour strictly wasteful, so the LP never does both
+    # at once — this replaces the binary that would otherwise enforce mutual
+    # exclusion, keeping the whole model a pure LP.
+    if have_sto:
+        obj = obj + cfg.storage_op_cost_eur_per_mwh * (ch.sum() + dis.sum())
     m.add_objective(obj)
 
     br = BuildResult(m, cfg, zones, hours, gens, commit, storage, gen_upper,
@@ -412,19 +412,16 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     return br
 
 
-def marginal_prices(zdata, net, cfg, milp_build: BuildResult):
+def marginal_prices(build: BuildResult):
     """Zonal marginal prices (EUR/MWh) as the duals of the nodal balances.
 
-    Duals exist only for LPs, so we fix the integer commitment to its MILP
-    optimum and re-solve the resulting LP; HiGHS then returns the balance duals.
-    Returns (price_e, price_h) DataArrays over (zone, hour). The dual of
+    The dispatch is a pure LP, so the balance duals come straight from the
+    already-solved model — no commitment-fixing re-solve is needed. Returns
+    (price_e, price_h) DataArrays over (zone, hour). The dual of
     ``balance == demand`` is d(cost)/d(demand) = the marginal price of supply.
     """
-    n_sol = milp_build.model.solution["n_units"].to_pandas()
-    lp = build_model(zdata, net, cfg, fix_commit=n_sol)
-    lp.model.solve(solver_name=cfg.solver_name)
-    price_e = lp.model.constraints["elec_balance"].dual
-    price_h = lp.model.constraints["h2_balance"].dual
+    price_e = build.model.constraints["elec_balance"].dual
+    price_h = build.model.constraints["h2_balance"].dual
     return price_e, price_h
 
 
@@ -506,11 +503,13 @@ def _bc_line(da: xr.DataArray, hours: pd.Index) -> xr.DataArray:
     return da.expand_dims({HOUR: hours}).transpose(dim, HOUR)
 
 
-def _add_reserves(m, zdata, zones, hours, gens, commit, gen_p, n, pmax):
-    """FCR+FRR: committed headroom of thermal units >= total requirement per zone."""
+def _add_reserves(m, zdata, zones, hours, commit, gen_p):
+    """FCR+FRR: spare headroom of thermal fleets >= total requirement per zone."""
     cidx = commit.index
-    # headroom = committed capacity - output = n*pmax_unit - gen_p (per committable gen)
-    headroom = n * pmax - gen_p.sel({GEN: cidx})
+    # With no commitment binary, the whole fleet capacity is available for
+    # reserve: headroom = fleet capacity - output = pmax(fleet) - gen_p.
+    capacity = xr.DataArray(commit["pmax"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
+    headroom = capacity - gen_p.sel({GEN: cidx})
     A = _incidence(commit["zone"], zones, GEN)
     head_by_zone = (A * headroom).sum(GEN)
     req = []

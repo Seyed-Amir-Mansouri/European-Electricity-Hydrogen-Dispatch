@@ -94,6 +94,11 @@ class RunConfig:
     voll_eur_per_mwh: float = 10_000.0  # value of lost load (elec & H2 shedding penalty)
     h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)
     dump_penalty_eur_per_mwh: float = 0.0  # penalty for dumping/curtailing excess supply
+    # Small per-MWh cost on storage throughput (charge + discharge). Makes
+    # simultaneous charge/discharge strictly wasteful so the LP never does both
+    # at once, avoiding the need for a binary. Keep tiny so it doesn't distort
+    # dispatch economics (ASSUMPTION).
+    storage_op_cost_eur_per_mwh: float = 0.01
 
     # --- Physics defaults --------------------------------------------------
     initial_soc_fraction: float = 0.5  # storage state of charge at hour 0

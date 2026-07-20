@@ -106,9 +106,7 @@ def run(cfg: RunConfig):
         return build
 
     if cfg.compute_prices:
-        t = time.time()
-        build.price_e, build.price_h = model.marginal_prices(zdata, net, cfg, build)
-        print(f"Marginal prices (LP re-solve): {time.time() - t:.1f}s")
+        build.price_e, build.price_h = model.marginal_prices(build)
 
     s = report.summary(build)
     print("\n=== Summary ===")

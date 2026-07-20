@@ -66,19 +66,19 @@ h2term = st.sidebar.checkbox("H2 terminal imports", True)
 prices = st.sidebar.checkbox("Marginal prices", True)
 rolling = st.sidebar.number_input(
     "Rolling block (days, 0 = off)", 0, 60, 0, step=1,
-    help="For long horizons (a month or a full year) the monolithic MILP is "
+    help="For long horizons (a month or a full year) the monolithic LP is "
          "too large to solve. Set a block size (e.g. 7) to solve the horizon "
          "in day-blocks, carrying storage state forward.")
 go = st.sidebar.button("Run dispatch", type="primary", use_container_width=True)
 
 st.title("CORE Electricity + Hydrogen Dispatch")
-st.caption("ENTSO-E TYNDP NT2030 · CORE-region zones · MILP unit commitment (linopy + HiGHS)")
+st.caption("ENTSO-E TYNDP NT2030 · CORE-region zones · linear dispatch (linopy + HiGHS)")
 
 if go:
     if not zones:
         st.error("Select at least one zone.")
     else:
-        with st.spinner("Building & solving the MILP…"):
+        with st.spinner("Building & solving the LP…"):
             st.session_state.result = run_scenario(
                 tuple(sorted(zones)), start, end,
                 storage, ramps, reserves, h2term, prices, int(rolling))

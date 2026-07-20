@@ -1,6 +1,6 @@
 """End-to-end scenario runners shared by the CLI and the web UI.
 
-``solve_scenario`` solves the whole horizon as one MILP and returns the
+``solve_scenario`` solves the whole horizon as one LP and returns the
 :class:`BuildResult`. ``solve_rolling`` splits a long horizon into day-blocks,
 solving each in turn and carrying storage state forward — the practical way to
 run a full year, since a monolithic 8736-hour model is too large to solve
@@ -25,7 +25,7 @@ def solve_scenario(cfg: RunConfig) -> BuildResult:
     build = model.build_model(zdata, net, cfg)
     solve.solve(build)
     if cfg.compute_prices:
-        build.price_e, build.price_h = model.marginal_prices(zdata, net, cfg, build)
+        build.price_e, build.price_h = model.marginal_prices(build)
     return build
 
 
@@ -49,7 +49,7 @@ def solve_rolling(cfg: RunConfig, block_days: int, verbose: bool = True) -> dict
         build = model.build_model(zdata, net, bcfg, soc_init=soc_carry, cyclic=False)
         solve.solve(build)
         if cfg.compute_prices:
-            build.price_e, build.price_h = model.marginal_prices(zdata, net, bcfg, build)
+            build.price_e, build.price_h = model.marginal_prices(build)
 
         val = report.validate(build)
         ok = ok and val["max_elec_residual"] < val["tol"] and val["max_h2_residual"] < val["tol"]

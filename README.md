@@ -2,7 +2,7 @@
   <img src="Power-Hydrogen%20Co-Dispatch%20Overview.png" alt="Power-Hydrogen Co-Dispatch Overview" width="760">
 </p>
 
-A **MILP unit-commitment economic dispatch** over the **Central-European CORE
+A **linear-programming economic dispatch** over the **Central-European CORE
 region** — the database covers the 23 ENTSO-E bidding zones of the 13 CORE
 Capacity-Calculation-Region countries (AT, BE, CZ, DE, FR, HR, HU, LU, NL, PL,
 RO, SI, SK) — coupling two energy carriers, **electricity** and **hydrogen**,
@@ -71,7 +71,7 @@ CLI flags:
 | `--no-ramps` | drop generator ramp limits |
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
-| `--no-prices` | skip the marginal-price computation (the extra LP re-solve) |
+| `--no-prices` | skip reading the marginal-price duals from the solved LP |
 | `--rolling-days N` | solve a long horizon in `N`-day rolling blocks (see below) |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
@@ -90,19 +90,20 @@ python run_dispatch.py --day 200 --out-tag summer_day
 # -> outputs/winter_day/  and  outputs/summer_day/  side by side
 ```
 
-Multi-day runs build a larger MILP (constraints scale with the number of hours);
+Multi-day runs build a larger LP (constraints scale with the number of hours);
 storage state-of-charge is cyclic over the **whole** horizon and must-run uses
 the first day's month.
 
 ### Long horizons (a month or a full year)
 
-A monolithic MILP over hundreds or thousands of hours becomes too large to solve
-directly (the full 8736-hour year has ~4 M rows — the root LP relaxation alone
-never finishes on a typical machine). For horizons beyond a couple of weeks, use
-**rolling-horizon** decomposition: the run is split into consecutive day-blocks,
-each solved as its own MILP, with **storage state-of-charge carried forward** from
-one block to the next (storage is not forced cyclic within a block). The
-per-block balance tables are stitched into the same two full-horizon CSVs.
+A monolithic LP over hundreds or thousands of hours becomes too large to solve
+directly (the full 8736-hour year has ~4 M rows, which the simplex/barrier
+methods do not finish on a typical machine). For horizons beyond a couple of
+weeks, use **rolling-horizon** decomposition: the run is split into consecutive
+day-blocks, each solved as its own LP, with **storage state-of-charge carried
+forward** from one block to the next (storage is not forced cyclic within a
+block). The per-block balance tables are stitched into the same two full-horizon
+CSVs.
 
 ```bash
 # full year in weekly blocks (52 blocks); skip prices for speed
@@ -136,8 +137,8 @@ Signs are chosen so supply is `+` and consumption `-`, so the energy (MW)
 categories of each row sum to ~0 (the nodal balance holds).
 
 **Marginal Price (EUR/MWh)** is the zonal price — the dual of the nodal balance.
-Because duals need an LP, the model fixes the integer commitment to its MILP
-optimum and re-solves as an LP to read the balance shadow prices (skip this extra
-solve with `--no-prices`). Empty nodes (no demand, generation, or lines) have a
-degenerate dual that pins at the shedding penalty, so a price at that penalty
-with no actual shedding is treated as undefined and left blank.
+Since the dispatch is a pure LP, this dual comes straight from the single solve —
+no re-solve is needed (skip computing prices at all with `--no-prices`). Empty
+nodes (no demand, generation, or lines) have a degenerate dual that pins at the
+shedding penalty, so a price at that penalty with no actual shedding is treated
+as undefined and left blank.

@@ -1,4 +1,4 @@
-"""Coupled electricity + hydrogen economic dispatch (MILP unit commitment).
+"""Coupled electricity + hydrogen economic dispatch (linear program).
 
 A single-day (24 h) dispatch model over ENTSO-E-style bidding zones, built on
 linopy + HiGHS. See README.md for the data model and assumptions.
