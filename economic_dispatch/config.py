@@ -78,8 +78,7 @@ class RunConfig:
     enable_reserves: bool = False      # FCR/FRR headroom constraints (off by default)
     enable_h2_terminal: bool = True    # allow external H2 supply at import terminals
     enable_h2_storage: bool = True     # model H2 storage (Injection/Withdraw Hydrogen power)
-    cyclic_storage: bool = True        # end-of-day SoC must return to initial SoC
-    compute_prices: bool = True        # zonal marginal prices (LP re-solve with commitment fixed)
+    cyclic_storage: bool = True        # end-of-horizon SoC >= initial SoC (full storage cycle)
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where
@@ -94,10 +93,12 @@ class RunConfig:
     voll_eur_per_mwh: float = 10_000.0  # value of lost load (elec & H2 shedding penalty)
     h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)
     dump_penalty_eur_per_mwh: float = 0.0  # penalty for dumping/curtailing excess supply
-    # Small per-MWh cost on storage throughput (charge + discharge). Makes
-    # simultaneous charge/discharge strictly wasteful so the LP never does both
-    # at once, avoiding the need for a binary. Keep tiny so it doesn't distort
-    # dispatch economics (ASSUMPTION).
+    # Small per-MWh cost on storage throughput (charge + discharge), to forbid
+    # simultaneous charge/discharge without a binary. Not needed for lossy
+    # devices (efficiency < 1, e.g. batteries): there charging+discharging at
+    # once already wastes energy. It matters for lossless devices (efficiency =
+    # 1, e.g. hydro reservoir/pumped-storage and H2 storage), where without it
+    # the LP could do both at once. Keep tiny so it doesn't distort economics.
     storage_op_cost_eur_per_mwh: float = 0.01
 
     # --- Physics defaults --------------------------------------------------
@@ -113,8 +114,6 @@ class RunConfig:
     # --- Solver ------------------------------------------------------------
     solver_name: str = "highs"
     mip_rel_gap: float = 1e-4
-    recover_prices: bool = False       # fix commitment, re-solve LP for shadow prices
-    rolling_block_days: int = 0        # >0: rolling-horizon solve in day-blocks (long horizons)
 
     def resolved_output_dir(self) -> Path:
         """Output folder for this run: outputs/ or outputs/<out_tag>/ if tagged."""

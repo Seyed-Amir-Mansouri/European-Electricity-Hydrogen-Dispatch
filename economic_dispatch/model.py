@@ -114,14 +114,18 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 ramp_dn = zd.char_val(tech, "Ramp-Down Rate (MW/h)", 0.0)
                 mustrun = zd.must_run_units(tech, month)
                 mustrun = float(min(max(mustrun, 0.0), max_units))
-                # Pure-LP dispatch (no commitment binary): instead of
-                # n*Pmin <= p <= n*Pmax with integer n, the fleet output floats
-                # between a fixed floor and its capacity. A tech with a must-run
-                # requirement keeps ``mustrun`` units online at their minimum
-                # stable power, so its floor is max(min-stable, must-run) held
-                # online = mustrun * pmin_unit; a tech with no must-run can idle
-                # at 0. (mustrun is a monthly unit count from the data.)
-                pmin_floor = mustrun * pmin_unit
+                # Pure-LP dispatch (no commitment binary): the fleet output
+                # floats between a fixed floor and its capacity. Both the
+                # must-run level (x) and the minimum stable power (y) are read as
+                # fractions of capacity -- must-run as the share of the fleet
+                # that must run (mustrun units / total units), min-stable as its
+                # own percentage -- and the floor is max(x, y) * capacity. A tech
+                # with no must-run requirement can idle at 0.
+                if mustrun > 0:
+                    mustrun_frac = mustrun / max_units
+                    pmin_floor = max(mustrun_frac, msp) * cap
+                else:
+                    pmin_floor = 0.0
                 # Missing/zero efficiency -> use the default (avoids a 1/eff = 1e6
                 # coefficient in the H2 balance that ruins the LP conditioning).
                 eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
@@ -251,7 +255,15 @@ def _incidence(members: pd.Series, zones: list[str], dim: str) -> xr.DataArray:
 
 
 def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
-                soc_init: pd.Series | None = None, cyclic: bool | None = None) -> BuildResult:
+                cyclic: bool | None = None) -> BuildResult:
+    """Build the dispatch LP.
+
+    ``cyclic`` controls the end-of-horizon storage closure:
+      * ``None`` -> use ``cfg.cyclic_storage``;
+      * ``True`` -> ``soc[T-1] >= soc0`` (every device ends no lower than it
+        started, i.e. a full storage cycle over the horizon);
+      * ``False`` -> no closure constraint.
+    """
     zones = cfg.zones
     H = len(zdata[zones[0]].profiles)
     hours = pd.Index(range(H), name=HOUR)
@@ -304,12 +316,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         dis_h2_by_zone = (A_sto * mask_h * dis).sum(STO)
         ch_h2_by_zone = (A_sto * mask_h * ch).sum(STO)
 
-        default_init = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
-        if soc_init is None:
-            soc0 = default_init
-        else:  # rolling horizon: carry the previous block's end-of-block SoC
-            soc0 = pd.Series(soc_init).reindex(sidx).fillna(
-                pd.Series(default_init, index=sidx)).to_numpy(float)
+        soc0 = cfg.initial_soc_fraction * storage["ecap"].to_numpy(float)
         inflow_mat = np.vstack([sinflow[s] for s in sidx])            # (sto, H)
         eff_da = xr.DataArray(eff, coords={STO: sidx}, dims=[STO])
         # One vectorised recursion instead of a per-hour loop:
@@ -322,8 +329,10 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         m.add_constraints(soc - soc.shift({HOUR: 1}) - eff_da * ch + dis + spill == rhs,
                           name="soc_balance")
         if cfg.cyclic_storage if cyclic is None else cyclic:
+            # Full storage cycle: every device ends the horizon no lower than it
+            # began it, soc[T-1] >= soc0 (the initial state of charge).
             end = xr.DataArray(soc0, coords={STO: sidx}, dims=[STO])
-            m.add_constraints(soc.sel({HOUR: H - 1}) == end, name="soc_cyclic")
+            m.add_constraints(soc.sel({HOUR: H - 1}) >= end, name="soc_cyclic")
     else:
         dis_by_zone = ch_by_zone = 0.0
         dis_h2_by_zone = ch_h2_by_zone = 0.0
@@ -396,10 +405,14 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
         + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
         + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum())
-    # A small per-MWh throughput cost on every storage device makes charging and
-    # discharging in the same hour strictly wasteful, so the LP never does both
-    # at once — this replaces the binary that would otherwise enforce mutual
-    # exclusion, keeping the whole model a pure LP.
+    # A small per-MWh throughput cost on every storage device forbids charging
+    # and discharging in the same hour without a binary. It is not needed for
+    # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
+    # simultaneous charge+discharge already loses energy, so the LP avoids it on
+    # its own. It matters for lossless devices (efficiency = 1, e.g. hydro
+    # reservoir / pumped-storage and H2 storage as modelled), where without it
+    # the LP could charge and discharge at once (a harmless wash) — the tiny
+    # cost cleans that up and keeps the model a pure LP.
     if have_sto:
         obj = obj + cfg.storage_op_cost_eur_per_mwh * (ch.sum() + dis.sum())
     m.add_objective(obj)

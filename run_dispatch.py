@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from economic_dispatch.config import RunConfig
-from economic_dispatch import data_loader, network_loader, model, solve, report, pipeline
+from economic_dispatch import data_loader, network_loader, model, solve, report
 
 
 def parse_args() -> RunConfig:
@@ -32,11 +32,6 @@ def parse_args() -> RunConfig:
     p.add_argument("--no-ramps", action="store_true")
     p.add_argument("--reserves", action="store_true", help="enable FCR/FRR constraints")
     p.add_argument("--no-h2-terminal", action="store_true")
-    p.add_argument("--no-prices", action="store_true",
-                   help="skip marginal-price computation (the extra LP re-solve)")
-    p.add_argument("--rolling-days", type=int, default=0,
-                   help="solve a long horizon in N-day rolling blocks (storage carried "
-                        "over); recommended for month/year runs (e.g. --rolling-days 7)")
     p.add_argument("--out-tag", default=None,
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
     a = p.parse_args()
@@ -68,8 +63,6 @@ def parse_args() -> RunConfig:
     cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
     cfg.enable_h2_terminal = not a.no_h2_terminal
-    cfg.compute_prices = not a.no_prices
-    cfg.rolling_block_days = a.rolling_days
     cfg.out_tag = a.out_tag
     return cfg
 
@@ -80,9 +73,6 @@ def run(cfg: RunConfig):
             else f"days {cfg.start_day}-{cfg.end_day}")
     print(f"Zones: {len(cfg.zones)}  {span}  "
           f"({cfg.num_days()} day(s), hours {h0}-{h1 - 1}, {h1 - h0}h)")
-
-    if cfg.rolling_block_days > 0:
-        return _run_rolling(cfg)
 
     t = time.time()
     zdata = data_loader.load_zones_from_db(cfg.zones, cfg.zones_db, h0, h1)
@@ -105,8 +95,7 @@ def run(cfg: RunConfig):
         print(f"WARNING: solver returned status={status}")
         return build
 
-    if cfg.compute_prices:
-        build.price_e, build.price_h = model.marginal_prices(build)
+    build.price_e, build.price_h = model.marginal_prices(build)
 
     s = report.summary(build)
     print("\n=== Summary ===")
@@ -124,20 +113,6 @@ def run(cfg: RunConfig):
     report.write_outputs(build, out_dir)
     print(f"\nOutputs written to {out_dir}")
     return build
-
-
-def _run_rolling(cfg: RunConfig):
-    """Rolling-horizon path: solve in day-blocks, carry storage, stitch outputs."""
-    print(f"Rolling horizon: {cfg.rolling_block_days}-day blocks "
-          f"({-(-cfg.num_days() // cfg.rolling_block_days)} blocks)")
-    t = time.time()
-    res = pipeline.solve_rolling(cfg, cfg.rolling_block_days)
-    print(f"Solved {cfg.num_days()} days in {time.time() - t:.1f}s"
-          f"  -> {'PASS' if res['ok'] else 'FAIL'} (per-block balance check)")
-    out_dir = cfg.resolved_output_dir()
-    report.write_balance_tables(res, out_dir)
-    print(f"Outputs written to {out_dir}")
-    return None
 
 
 if __name__ == "__main__":

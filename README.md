@@ -71,8 +71,6 @@ CLI flags:
 | `--no-ramps` | drop generator ramp limits |
 | `--reserves` | enable FCR/FRR head-room constraints |
 | `--no-h2-terminal` | forbid hydrogen terminal imports |
-| `--no-prices` | skip reading the marginal-price duals from the solved LP |
-| `--rolling-days N` | solve a long horizon in `N`-day rolling blocks (see below) |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
 Results are written to `outputs/` and a balance-validation check prints at the
@@ -90,31 +88,11 @@ python run_dispatch.py --day 200 --out-tag summer_day
 # -> outputs/winter_day/  and  outputs/summer_day/  side by side
 ```
 
-Multi-day runs build a larger LP (constraints scale with the number of hours);
-storage state-of-charge is cyclic over the **whole** horizon and must-run uses
-the first day's month.
-
-### Long horizons (a month or a full year)
-
-A monolithic LP over hundreds or thousands of hours becomes too large to solve
-directly (the full 8736-hour year has ~4 M rows, which the simplex/barrier
-methods do not finish on a typical machine). For horizons beyond a couple of
-weeks, use **rolling-horizon** decomposition: the run is split into consecutive
-day-blocks, each solved as its own LP, with **storage state-of-charge carried
-forward** from one block to the next (storage is not forced cyclic within a
-block). The per-block balance tables are stitched into the same two full-horizon
-CSVs.
-
-```bash
-# full year in weekly blocks (52 blocks); skip prices for speed
-python run_dispatch.py --start-day 1 --end-day 364 --rolling-days 7 --no-prices
-```
-
-A weekly block solves in tens of seconds, so a full year completes in roughly
-half an hour rather than hanging indefinitely. Smaller blocks are faster and use
-less memory but see less of the future (e.g. a battery cannot arbitrage across a
-block boundary); a week is a good default. The Streamlit UI exposes the same
-control as **Rolling block (days)** in the sidebar (`0` = solve monolithically).
+Multi-day runs build a larger LP (constraints scale with the number of hours).
+Every storage device must finish the horizon **no lower than it started it** —
+`soc[last hour] ≥ soc[first hour]` (a full storage cycle over the run) — so a
+run cannot look good merely by draining the reservoirs it began with. Must-run
+uses the first day's month.
 
 **Zones default to every zone in the database.** Selecting a subset with
 `--zones` automatically reclassifies each border: a line between two selected
@@ -137,8 +115,8 @@ Signs are chosen so supply is `+` and consumption `-`, so the energy (MW)
 categories of each row sum to ~0 (the nodal balance holds).
 
 **Marginal Price (EUR/MWh)** is the zonal price — the dual of the nodal balance.
-Since the dispatch is a pure LP, this dual comes straight from the single solve —
-no re-solve is needed (skip computing prices at all with `--no-prices`). Empty
-nodes (no demand, generation, or lines) have a degenerate dual that pins at the
-shedding penalty, so a price at that penalty with no actual shedding is treated
-as undefined and left blank.
+Since the dispatch is a pure LP, this dual comes straight from the single solve
+(no re-solve needed), so prices are always reported. Empty nodes (no demand,
+generation, or lines) have a degenerate dual that pins at the shedding penalty,
+so a price at that penalty with no actual shedding is treated as undefined and
+left blank.

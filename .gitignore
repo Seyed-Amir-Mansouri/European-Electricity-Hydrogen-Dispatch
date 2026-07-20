@@ -5,3 +5,4 @@ inputs/*.xlsx
 __pycache__/
 *.pyc
 build_db.py
+CLAUDE.md

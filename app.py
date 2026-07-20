@@ -26,7 +26,7 @@ def available_zones() -> list[str]:
 
 
 @st.cache_data(show_spinner=False)
-def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices, rolling):
+def run_scenario(zones, start, end, storage, ramps, reserves, h2term):
     """Solve one scenario and return (tables, ok, zones)."""
     cfg = RunConfig(start_day=start, end_day=end)
     cfg.zones = list(zones)
@@ -34,10 +34,6 @@ def run_scenario(zones, start, end, storage, ramps, reserves, h2term, prices, ro
     cfg.enable_ramps = ramps
     cfg.enable_reserves = reserves
     cfg.enable_h2_terminal = h2term
-    cfg.compute_prices = prices
-    if rolling > 0:
-        res = pipeline.solve_rolling(cfg, rolling, verbose=False)
-        return {"elec": res["elec"], "h2": res["h2"]}, res["ok"], list(cfg.zones)
     build = pipeline.solve_scenario(cfg)
     val = report.validate(build)
     ok = val["max_elec_residual"] < val["tol"] and val["max_h2_residual"] < val["tol"]
@@ -63,12 +59,6 @@ storage = st.sidebar.checkbox("Storage", True)
 ramps = st.sidebar.checkbox("Ramp limits", True)
 reserves = st.sidebar.checkbox("Reserves (FCR/FRR)", False)
 h2term = st.sidebar.checkbox("H2 terminal imports", True)
-prices = st.sidebar.checkbox("Marginal prices", True)
-rolling = st.sidebar.number_input(
-    "Rolling block (days, 0 = off)", 0, 60, 0, step=1,
-    help="For long horizons (a month or a full year) the monolithic LP is "
-         "too large to solve. Set a block size (e.g. 7) to solve the horizon "
-         "in day-blocks, carrying storage state forward.")
 go = st.sidebar.button("Run dispatch", type="primary", use_container_width=True)
 
 st.title("CORE Electricity + Hydrogen Dispatch")
@@ -81,7 +71,7 @@ if go:
         with st.spinner("Building & solving the LP…"):
             st.session_state.result = run_scenario(
                 tuple(sorted(zones)), start, end,
-                storage, ramps, reserves, h2term, prices, int(rolling))
+                storage, ramps, reserves, h2term)
 
 if "result" not in st.session_state:
     st.info("Set the scenario in the sidebar and click **Run dispatch**.")
@@ -117,13 +107,10 @@ with tab_gen:
 
 # ---- Marginal prices ------------------------------------------------------ #
 with tab_price:
-    if _PRICE in elec[solved_zones[0]].columns:
-        st.subheader("Electricity price (EUR/MWh)")
-        st.line_chart(elec.xs(_PRICE, axis=1, level=1))
-        st.subheader("Hydrogen price (EUR/MWh)")
-        st.line_chart(h2.xs(_PRICE, axis=1, level=1))
-    else:
-        st.info("Marginal prices were not computed — enable them in the sidebar and re-run.")
+    st.subheader("Electricity price (EUR/MWh)")
+    st.line_chart(elec.xs(_PRICE, axis=1, level=1))
+    st.subheader("Hydrogen price (EUR/MWh)")
+    st.line_chart(h2.xs(_PRICE, axis=1, level=1))
 
 # ---- Tables + downloads --------------------------------------------------- #
 with tab_tables:
