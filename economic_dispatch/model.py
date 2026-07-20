@@ -111,10 +111,14 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 ramp_dn = zd.char_val(tech, "Ramp-Down Rate (MW/h)", 0.0)
                 mustrun = zd.must_run_units(tech, month)
                 mustrun = float(min(max(mustrun, 0.0), max_units))
+                # Missing/zero efficiency -> use the default (avoids a 1/eff = 1e6
+                # coefficient in the H2 balance that ruins the LP conditioning).
+                eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
+                eff = eff if eff > 1e-3 else cfg.default_efficiency
                 rows.append(dict(
                     gen=gid, zone=z, tech=tech, category=category, h2_fuel=h2_fuel,
                     mc=_marginal_cost(zd, tech, h2_fuel, net.co2_price, cfg),
-                    eff=max(zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0, 1e-6),
+                    eff=eff,
                     units=max_units, pmin_unit=pmin_unit, pmax_unit=pmax_unit,
                     ramp_up=ramp_pu * units * cfg.ramp_scale,
                     ramp_dn=ramp_dn * units * cfg.ramp_scale,
