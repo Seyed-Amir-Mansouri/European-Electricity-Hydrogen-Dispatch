@@ -114,18 +114,17 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 ramp_dn = zd.char_val(tech, "Ramp-Down Rate (MW/h)", 0.0)
                 mustrun = zd.must_run_units(tech, month)
                 mustrun = float(min(max(mustrun, 0.0), max_units))
-                # Pure-LP dispatch (no commitment binary): the fleet output
-                # floats between a fixed floor and its capacity. Both the
-                # must-run level (x) and the minimum stable power (y) are read as
-                # fractions of capacity -- must-run as the share of the fleet
-                # that must run (mustrun units / total units), min-stable as its
-                # own percentage -- and the floor is max(x, y) * capacity. A tech
-                # with no must-run requirement can idle at 0.
-                if mustrun > 0:
-                    mustrun_frac = mustrun / max_units
-                    pmin_floor = max(mustrun_frac, msp) * cap
-                else:
-                    pmin_floor = 0.0
+                # Pure-LP dispatch (no commitment binary), matching PLEXOS's
+                # convention that Min Stable Level only binds on COMMITTED units
+                # (Generation >= MSL * Units_online): with no online-count
+                # variable, the only units we can treat as forced-committed are
+                # the must-run ones, so the floor is must-run units held at
+                # their own per-unit MSL -- not the whole fleet's capacity. A
+                # tech with no must-run requirement has no forced-online units
+                # and can idle at 0 (PLEXOS would leave its commitment to the
+                # optimizer, which an LP with no online variable cannot do
+                # either, so 0 is the correct floor here too).
+                pmin_floor = mustrun * pmin_unit if mustrun > 0 else 0.0
                 # Missing/zero efficiency -> use the default (avoids a 1/eff = 1e6
                 # coefficient in the H2 balance that ruins the LP conditioning).
                 eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
@@ -398,7 +397,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     # ---- reserves (optional) -------------------------------------------- #
     if cfg.enable_reserves:
-        _add_reserves(m, zdata, zones, hours, commit, gen_p)
+        sto_reserve = (storage, dis) if have_sto else None
+        _add_reserves(m, zdata, zones, hours, commit, gen_p, sto_reserve)
 
     # ---- objective ------------------------------------------------------- #
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
@@ -516,8 +516,16 @@ def _bc_line(da: xr.DataArray, hours: pd.Index) -> xr.DataArray:
     return da.expand_dims({HOUR: hours}).transpose(dim, HOUR)
 
 
-def _add_reserves(m, zdata, zones, hours, commit, gen_p):
-    """FCR+FRR: spare headroom of thermal fleets >= total requirement per zone."""
+def _add_reserves(m, zdata, zones, hours, commit, gen_p, sto_reserve=None):
+    """FCR+FRR: spare headroom of thermal fleets + electricity storage >= requirement.
+
+    PLEXOS draws its reserve pool from every available resource, not just
+    thermal plant: battery and hydro (reservoir/pumped-storage) discharge
+    headroom count towards FCR/FRR alongside spare thermal capacity. With no
+    commitment binary, the whole thermal fleet capacity is available for
+    reserve (headroom = pmax(fleet) - gen_p); each electricity storage device
+    contributes its spare discharge headroom (Pdis - dis).
+    """
     cidx = commit.index
     # With no commitment binary, the whole fleet capacity is available for
     # reserve: headroom = fleet capacity - output = pmax(fleet) - gen_p.
@@ -525,6 +533,17 @@ def _add_reserves(m, zdata, zones, hours, commit, gen_p):
     headroom = capacity - gen_p.sel({GEN: cidx})
     A = _incidence(commit["zone"], zones, GEN)
     head_by_zone = (A * headroom).sum(GEN)
+
+    if sto_reserve is not None:
+        storage, dis = sto_reserve
+        e_sto = storage[storage["carrier"] == "electricity"]
+        if len(e_sto) > 0:
+            sidx = e_sto.index
+            pdis = xr.DataArray(e_sto["pdis"].to_numpy(float), coords={STO: sidx}, dims=[STO])
+            sto_headroom = pdis - dis.sel({STO: sidx})
+            A_sto = _incidence(e_sto["zone"], zones, STO)
+            head_by_zone = head_by_zone + (A_sto * sto_headroom).sum(STO)
+
     req = []
     for z in zones:
         r = zdata[z].reserves
