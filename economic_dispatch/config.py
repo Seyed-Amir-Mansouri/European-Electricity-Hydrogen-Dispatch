@@ -79,6 +79,19 @@ class RunConfig:
     enable_h2_terminal: bool = True    # allow external H2 supply at import terminals
     enable_h2_storage: bool = True     # model H2 storage (Injection/Withdraw Hydrogen power)
     cyclic_storage: bool = True        # end-of-horizon SoC >= initial SoC (full storage cycle)
+    # Unit commitment (off by default -- the ONE place this project uses
+    # integer variables; see model.build_model's fixed_uc_profile /
+    # pipeline.solve_scenario's two-pass solve). Currently covers min
+    # up/down time (+ minimum stable level while committed); more UC-related
+    # constraints (e.g. start-up cost) are meant to layer onto this same flag
+    # over time. Only applies to committable fleets with pmin_floor == 0
+    # (must-run fleets are already permanently on) AND Min Time On/Off > 1h (a
+    # 1h minimum is a no-op at hourly resolution) -- for DE00 that's just
+    # Gas (conv_old1) and Gas (ccgt_old1). Verified to change only those two
+    # fleets' own dispatch pattern (single-hour "blips" -> real
+    # >=MinTime-long committed runs); system-wide price/shed are unaffected
+    # at this scale. See Formulation.md Sec 9a.
+    enable_uc: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

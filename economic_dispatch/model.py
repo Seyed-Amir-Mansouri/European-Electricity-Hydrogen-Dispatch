@@ -37,6 +37,16 @@ GEN = "gen"
 ZONE = "zone"
 STO = "sto"
 
+# UC data (cfg.enable_uc): "Minimum Up Time (h)", "Minimum Down Time (h)",
+# "Start-Up Cost (EUR)" are now zone-specific Characteristics columns (added
+# directly to each zone's own XLSX, sourced from XLSXs/Common Data.xlsx's
+# per-technology values -- warm-start fuel+wear cost, converted to a flat
+# EUR/MW-of-capacity figure -- so the model no longer reads Common Data.xlsx
+# itself; every zone carries its own values for every thermal tech). A tech
+# is only a real UC candidate if it ALSO has no must-run floor (must-run
+# fleets are already permanently on) and > 1h min time (1h is a no-op at
+# hourly resolution) -- see uc_candidates() below.
+
 
 def _num(arr) -> np.ndarray:
     """Coerce to float array with NaN/inf replaced by 0 (blank profile cells)."""
@@ -65,6 +75,8 @@ class BuildResult:
     net: NetworkData
     price_e: xr.DataArray | None = None   # elec marginal price (zone, hour), EUR/MWh
     price_h: xr.DataArray | None = None   # H2 marginal price (zone, hour), EUR/MWh
+    uc_gens: list[str] | None = None      # gen_ids with cfg.enable_uc's commitment binary (pass 1 only)
+    startup_cost_eur: float = 0.0         # total UC start-up cost incurred (pass 1's y_start solution x cost)
 
 
 def _marginal_cost(zd: ZoneData, tech: str, h2_fuel: bool, co2_price: float,
@@ -123,6 +135,13 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 # coefficient in the H2 balance that ruins the LP conditioning).
                 eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
                 eff = eff if eff > 1e-3 else cfg.default_efficiency
+                # UC data (cfg.enable_uc), all zone-specific Characteristics
+                # columns now: Min Up/Down Time (h) and Start-Up Cost (EUR),
+                # the latter already a flat EUR/MW-of-capacity figure -- just
+                # scale by fleet capacity for the total cost per start event.
+                min_up_h = zd.char_val(tech, "Minimum Up Time (h)", 0.0)
+                min_down_h = zd.char_val(tech, "Minimum Down Time (h)", 0.0)
+                startup_cost_per_mw = zd.char_val(tech, "Start-Up Cost (EUR)", 0.0)
                 rows.append(dict(
                     gen=gid, zone=z, tech=tech, category=category, h2_fuel=h2_fuel,
                     mc=_marginal_cost(zd, tech, h2_fuel, net.co2_price, cfg),
@@ -131,6 +150,9 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                     ramp_up=ramp_pu * units * cfg.ramp_scale,
                     ramp_dn=ramp_dn * units * cfg.ramp_scale,
                     mustrun_pct=mustrun_pct, pmin_floor=pmin_floor, pmax=cap,
+                    msl_frac=msp,  # "Minimum Stable Power (%)" as a fraction, for cfg.enable_uc
+                    min_up_h=min_up_h, min_down_h=min_down_h,
+                    startup_cost_eur=startup_cost_per_mw * cap,  # total EUR per start event
                 ))
                 upper[gid] = np.full(H, cap, dtype=float)
 
@@ -263,15 +285,35 @@ def _incidence(members: pd.Series, zones: list[str], dim: str) -> xr.DataArray:
     return xr.DataArray(A, coords={dim: members.index, ZONE: zones}, dims=[dim, ZONE])
 
 
+def uc_candidates(gens: pd.DataFrame) -> list[str]:
+    """Fleets eligible for cfg.enable_uc: no must-run floor (so they can
+    genuinely be off -- must-run fleets are already permanently on via their
+    continuous floor) AND min_up_h/min_down_h > 1h (a 1h minimum is a no-op
+    at hourly resolution)."""
+    return [gid for gid, row in gens.iterrows()
+            if row.get("pmin_floor", 0.0) == 0.0
+            and max(row.get("min_up_h", 0.0), row.get("min_down_h", 0.0)) > 1.0]
+
+
 def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
-                cyclic: bool | None = None) -> BuildResult:
-    """Build the dispatch LP.
+                cyclic: bool | None = None,
+                fixed_uc_profile: dict[str, np.ndarray] | None = None) -> BuildResult:
+    """Build the dispatch LP (or, with ``cfg.enable_uc``, a small MILP).
 
     ``cyclic`` controls the end-of-horizon storage closure:
       * ``None`` -> use ``cfg.cyclic_storage``;
       * ``True`` -> ``soc[T-1] >= soc0`` (every device ends no lower than it
         started, i.e. a full storage cycle over the horizon);
       * ``False`` -> no closure constraint.
+
+    ``fixed_uc_profile``: only meaningful with ``cfg.enable_uc``.
+    ``None`` (pass 1) builds the MILP: a commitment binary + start/stop +
+    min-up/down-time constraints for ``uc_candidates(gens)``. A dict
+    ``{gen_id: np.array(H)}`` (pass 2) instead bakes a solved 0/pmax
+    commitment schedule in as fixed capacity data and builds a PURE LP with
+    no binaries at all -- needed because HiGHS/linopy cannot return duals
+    (marginal prices) once any integer variable exists in the model, even
+    after it's solved. See pipeline.solve_scenario for the two-pass orchestration.
     """
     zones = cfg.zones
     H = len(zdata[zones[0]].profiles)
@@ -281,26 +323,83 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     gens, gupper = _build_generators(zdata, net, cfg)
     storage, sinflow = _build_storage(zdata, cfg)
 
+    uc_gens = uc_candidates(gens) if cfg.enable_uc else []
+
     m = linopy.Model()
 
-    # ---- generation (pure LP, no commitment binary) ---------------------- #
+    # ---- generation (pure LP, no commitment binary -- except uc_gens when -#
+    # ---- cfg.enable_uc is set) -------------------------------------------- #
     # Each fleet's output floats between a fixed floor and its available
     # capacity. The floor is "Must Run (%)" of installed capacity; resources
     # with no must-run requirement have a zero floor, so there is no need for
-    # an integer on/off variable.
+    # an integer on/off variable -- except uc_gens, optionally (see below).
     gen_index = gens.index
     upper_mat = np.vstack([gupper[g] for g in gen_index])
     gen_upper = xr.DataArray(upper_mat, coords={GEN: gen_index, HOUR: hours}, dims=[GEN, HOUR])
     floor_vec = np.nan_to_num(gens["pmin_floor"].to_numpy(float)) \
         if "pmin_floor" in gens.columns else np.zeros(len(gen_index))
-    gen_lower = xr.DataArray(floor_vec, coords={GEN: gen_index}, dims=[GEN])
+    gen_lower = xr.DataArray(
+        np.tile(floor_vec[:, None], (1, H)), coords={GEN: gen_index, HOUR: hours}, dims=[GEN, HOUR]
+    )
+    if fixed_uc_profile is not None:
+        gen_upper = gen_upper.copy()
+        for gid, prof in fixed_uc_profile.items():
+            msl_frac = float(gens.loc[gid, "msl_frac"])
+            gen_upper.loc[{GEN: gid}] = prof
+            gen_lower.loc[{GEN: gid}] = msl_frac * prof  # prof is 0 (off) or pmax (on)
     gen_p = m.add_variables(lower=gen_lower, upper=gen_upper, name="gen_p")
 
     A_gen = _incidence(gens["zone"], zones, GEN)
     gen_by_zone = (A_gen * gen_p).sum(GEN)
 
+    # ---- unit commitment: min up/down time (cfg.enable_uc) ------- #
+    # Standard rolling-window formulation (Rajan & Takriti): a commitment
+    # binary x_on, start/stop indicators y/z tied to it by x_t - x_{t-1} =
+    # y_t - z_t (unit assumed off before the horizon), and a window-sum cap
+    # linking start-ups/shut-downs to the current on/off state over the
+    # technology's own Min Time On/Off. gen_p is capped at pmax when on, 0
+    # when off, and floored at msl_frac*pmax when on (Minimum Stable Power
+    # (%), this zone's own data) -- without that floor the commitment
+    # constraint is satisfiable with zero real output for most of a
+    # committed block, which looks identical to the "blip" behaviour it's
+    # meant to prevent. Only built when fixed_uc_profile is None (pass 1);
+    # pass 2 bakes the solved schedule in as data above instead.
+    uc_x_on = None
+    uc_startup_obj = 0.0
+    if fixed_uc_profile is None and uc_gens:
+        uc_idx = pd.Index(uc_gens, name=GEN)
+        uc_x_on = m.add_variables(binary=True, coords=[uc_idx, hours], name="uc_on")
+        uc_y_start = m.add_variables(lower=0.0, upper=1.0, coords=[uc_idx, hours], name="uc_start")
+        uc_z_stop = m.add_variables(lower=0.0, upper=1.0, coords=[uc_idx, hours], name="uc_stop")
+
+        uc_cap = xr.DataArray(gens.loc[uc_gens, "pmax"].to_numpy(float), coords={GEN: uc_idx}, dims=[GEN])
+        uc_msl = xr.DataArray(gens.loc[uc_gens, "msl_frac"].to_numpy(float), coords={GEN: uc_idx}, dims=[GEN])
+        m.add_constraints(gen_p.sel({GEN: uc_idx}) <= uc_cap * uc_x_on, name="uc_cap_link")
+        m.add_constraints(gen_p.sel({GEN: uc_idx}) >= uc_msl * uc_cap * uc_x_on, name="uc_msl_link")
+
+        delta_x = uc_x_on - uc_x_on.shift({HOUR: 1}, fill_value=0.0)
+        m.add_constraints(delta_x == uc_y_start - uc_z_stop, name="uc_startstop")
+
+        for gid in uc_gens:
+            min_on = max(int(round(gens.loc[gid, "min_up_h"])), 1)
+            min_off = max(int(round(gens.loc[gid, "min_down_h"])), 1)
+            y_g = uc_y_start.sel({GEN: gid})
+            z_g = uc_z_stop.sel({GEN: gid})
+            x_g = uc_x_on.sel({GEN: gid})
+            roll_y = sum(y_g.shift({HOUR: k}, fill_value=0.0) for k in range(min_on))
+            roll_z = sum(z_g.shift({HOUR: k}, fill_value=0.0) for k in range(min_off))
+            m.add_constraints(roll_y <= x_g, name=f"uc_minup_{gid}")
+            m.add_constraints(roll_z <= 1 - x_g, name=f"uc_mindown_{gid}")
+
+        # Start-up cost: charged once per start-up event (uc_y_start==1), not
+        # per hour committed -- gens["startup_cost_eur"] is the zone's own
+        # "Start-Up Cost (EUR)" characteristic (EUR/MW) x fleet capacity.
+        uc_startup_cost = xr.DataArray(
+            gens.loc[uc_gens, "startup_cost_eur"].to_numpy(float), coords={GEN: uc_idx}, dims=[GEN]
+        )
+        uc_startup_obj = (uc_startup_cost * uc_y_start).sum()
+
     commit = gens[gens["category"] == dl.CAT_COMMIT].copy()
-    cidx = commit.index
 
     # ---- daily activation-hours cap (DSR blocks) -------------------------- #
     # Continuous energy-cap approximation of "Number of Hours (h)" (see
@@ -412,15 +511,23 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     m.add_constraints(h2_lhs == demand_h, name="h2_balance")
 
     # ---- ramps ----------------------------------------------------------- #
-    if cfg.enable_ramps and len(commit) > 0:
-        rup = xr.DataArray(commit["ramp_up"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-        rdn = xr.DataArray(commit["ramp_dn"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-        gp_c = gen_p.sel({GEN: cidx})
+    # uc_gens are excluded here (in both MILP and fixed-profile passes): with
+    # an MSL floor, start-up means jumping straight to msl_frac*pmax in one
+    # hour, which their physical ramp rate can't reach -- PLEXOS itself
+    # exempts start/stop transitions from ramp limits for exactly this
+    # reason (Sec 10); their timing is governed by the commitment + min
+    # up/down-time logic instead.
+    ramp_commit = commit.drop(index=uc_gens, errors="ignore") if uc_gens else commit
+    ramp_cidx = ramp_commit.index
+    if cfg.enable_ramps and len(ramp_commit) > 0:
+        rup = xr.DataArray(ramp_commit["ramp_up"].to_numpy(float), coords={GEN: ramp_cidx}, dims=[GEN])
+        rdn = xr.DataArray(ramp_commit["ramp_dn"].to_numpy(float), coords={GEN: ramp_cidx}, dims=[GEN])
+        gp_c = gen_p.sel({GEN: ramp_cidx})
         # delta[h] = gen[h] - gen[h-1] for h >= 1 (drop hour 0: no predecessor).
         delta = (gp_c - gp_c.shift({HOUR: 1})).isel({HOUR: slice(1, None)})
-        if commit["ramp_up"].to_numpy(float).max() > 0:
+        if ramp_commit["ramp_up"].to_numpy(float).max() > 0:
             m.add_constraints(delta <= rup, name="ramp_up")
-        if commit["ramp_dn"].to_numpy(float).max() > 0:
+        if ramp_commit["ramp_dn"].to_numpy(float).max() > 0:
             m.add_constraints(-delta <= rdn, name="ramp_dn")
 
     # ---- reserves (optional) -------------------------------------------- #
@@ -432,7 +539,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
     obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
         + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
-        + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum())
+        + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum()) \
+        + uc_startup_obj
     # A small per-MWh throughput cost on every storage device forbids charging
     # and discharging in the same hour without a binary. It is not needed for
     # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
@@ -446,7 +554,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     m.add_objective(obj)
 
     br = BuildResult(m, cfg, zones, hours, gens, commit, storage, gen_upper,
-                     demand_e, demand_h, external_e, external_h2, net.elec, net.hydrogen, net)
+                     demand_e, demand_h, external_e, external_h2, net.elec, net.hydrogen, net,
+                     uc_gens=(uc_gens if uc_x_on is not None else None))
     br._ely_eff = pd.Series(ely_eff, index=zones)  # for exact H2-balance validation
     br._ely_cap = pd.Series(ely_cap, index=zones)      # electrolyser power capacity (MW)
     br._term_cap = pd.Series(term_cap, index=zones)    # H2 terminal import capacity (MW, as used)
@@ -464,6 +573,26 @@ def marginal_prices(build: BuildResult):
     price_e = build.model.constraints["elec_balance"].dual
     price_h = build.model.constraints["h2_balance"].dual
     return price_e, price_h
+
+
+def uc_fixed_profile_and_cost(build: BuildResult) -> tuple[dict[str, np.ndarray], float]:
+    """From a solved pass-1 MILP build (``build.uc_gens`` non-empty): the
+    solved 0/pmax commitment profile per gen (for pass 2's fixed_uc_profile)
+    and the total start-up cost actually incurred (sum of
+    ``startup_cost_eur * uc_start`` over the solved schedule) -- this is the
+    only place that total is computable, since pass 2 has no uc_start
+    variable at all (the commitment decision is already fixed by then)."""
+    x_on_sol = build.model.solution["uc_on"]
+    y_start_sol = build.model.solution["uc_start"]
+    fixed_profile: dict[str, np.ndarray] = {}
+    total_cost = 0.0
+    for gid in build.uc_gens:
+        cap = float(build.gens.loc[gid, "pmax"])
+        onoff = np.round(x_on_sol.sel({GEN: gid}).to_numpy())
+        fixed_profile[gid] = onoff * cap
+        starts = y_start_sol.sel({GEN: gid}).to_numpy().sum()
+        total_cost += starts * float(build.gens.loc[gid, "startup_cost_eur"])
+    return fixed_profile, total_cost
 
 
 # --------------------------------------------------------------------------- #

@@ -196,11 +196,19 @@ def summary(build: BuildResult) -> dict[str, float]:
     if not sol["gen_p"].empty:
         mc = build.gens["mc"].reindex(sol["gen_p"].index).fillna(0.0)
         gen_cost = float((sol["gen_p"].mul(mc, axis=0)).to_numpy().sum())
+    # cfg.enable_uc's start-up cost isn't recoverable from this (pass-2, all
+    # continuous) build at all -- pass 1's uc_start decision is what incurred
+    # it, and pass 2 has no such variable. pipeline.solve_scenario /
+    # run_dispatch.run compute it right after pass 1 and stash it on the
+    # final build as build.startup_cost_eur (0.0 when UC is off or unused).
+    startup_cost = float(getattr(build, "startup_cost_eur", 0.0) or 0.0)
     obj = (gen_cost + cfg.h2_terminal_price * float(term_total)
-           + cfg.voll_eur_per_mwh * float(shed_e + shed_h))
+           + cfg.voll_eur_per_mwh * float(shed_e + shed_h)
+           + startup_cost)
     return {
         "objective_eur": obj,
         "generation_cost_eur": gen_cost,
+        "startup_cost_eur": startup_cost,
         "total_generation_mwh": float(gen_total),
         "electrolyser_load_mwh": float(ely_total),
         "h2_terminal_import_mwh": float(term_total),

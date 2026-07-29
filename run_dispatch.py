@@ -6,6 +6,7 @@ Examples
     python run_dispatch.py --zones DE00,FR00 --day 10        # a single day (10th)
     python run_dispatch.py --start-day 10 --end-day 16       # a 7-day horizon (168 h)
     python run_dispatch.py --no-ramps --reserves
+    python run_dispatch.py --zones DE00 --uc            # unit commitment (min up/down time)
 """
 from __future__ import annotations
 
@@ -31,6 +32,9 @@ def parse_args() -> RunConfig:
     p.add_argument("--no-storage", action="store_true")
     p.add_argument("--no-ramps", action="store_true")
     p.add_argument("--reserves", action="store_true", help="enable FCR/FRR constraints")
+    p.add_argument("--uc", action="store_true",
+                   help="enable unit commitment (small MILP; currently min up/down time, "
+                        "only Gas conv_old1/ccgt_old1 for DE00; see config.enable_uc)")
     p.add_argument("--no-h2-terminal", action="store_true")
     p.add_argument("--out-tag", default=None,
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
@@ -62,6 +66,7 @@ def parse_args() -> RunConfig:
     cfg.enable_storage = not a.no_storage
     cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
+    cfg.enable_uc = a.uc
     cfg.enable_h2_terminal = not a.no_h2_terminal
     cfg.out_tag = a.out_tag
     return cfg
@@ -94,6 +99,23 @@ def run(cfg: RunConfig):
     if status != "ok":
         print(f"WARNING: solver returned status={status}")
         return build
+
+    startup_cost_eur = 0.0
+    if build.uc_gens:
+        # cfg.enable_uc: that solve was a MILP (commitment binary
+        # for build.uc_gens), and HiGHS/linopy cannot return duals once any
+        # integer variable exists, even after solving. Fix the solved 0/pmax
+        # commitment schedule in as data and rebuild/re-solve as a pure LP
+        # (no binaries) to get real marginal prices.
+        t = time.time()
+        fixed_profile, startup_cost_eur = model.uc_fixed_profile_and_cost(build)
+        build = model.build_model(zdata, net, cfg, fixed_uc_profile=fixed_profile)
+        status = solve.solve(build)
+        print(f"Re-solved as continuous LP for marginal prices in {time.time() - t:.1f}s")
+        if status != "ok":
+            print(f"WARNING: solver returned status={status}")
+            return build
+    build.startup_cost_eur = startup_cost_eur
 
     build.price_e, build.price_h = model.marginal_prices(build)
 
