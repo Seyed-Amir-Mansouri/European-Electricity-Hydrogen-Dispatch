@@ -112,19 +112,13 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 pmin_unit = pmax_unit * msp
                 ramp_pu = zd.char_val(tech, "Ramp-Up Rate (MW/h)", 0.0)
                 ramp_dn = zd.char_val(tech, "Ramp-Down Rate (MW/h)", 0.0)
-                mustrun = zd.must_run_units(tech, month)
-                mustrun = float(min(max(mustrun, 0.0), max_units))
-                # Pure-LP dispatch (no commitment binary), matching PLEXOS's
-                # convention that Min Stable Level only binds on COMMITTED units
-                # (Generation >= MSL * Units_online): with no online-count
-                # variable, the only units we can treat as forced-committed are
-                # the must-run ones, so the floor is must-run units held at
-                # their own per-unit MSL -- not the whole fleet's capacity. A
-                # tech with no must-run requirement has no forced-online units
-                # and can idle at 0 (PLEXOS would leave its commitment to the
-                # optimizer, which an LP with no online variable cannot do
-                # either, so 0 is the correct floor here too).
-                pmin_floor = mustrun * pmin_unit if mustrun > 0 else 0.0
+                # Must-run floor: "Must Run (%)" is the share of INSTALLED
+                # CAPACITY that must run (not a unit count -- "Must Run (Number
+                # of units)" is a separate, unreliable column that reads 0 even
+                # for fleets "Must Run (%)" shows as partially must-run).
+                mustrun_pct = zd.must_run_pct(tech, month)
+                mustrun_pct = float(min(max(mustrun_pct, 0.0), 100.0))
+                pmin_floor = (mustrun_pct / 100.0) * cap if mustrun_pct > 0 else 0.0
                 # Missing/zero efficiency -> use the default (avoids a 1/eff = 1e6
                 # coefficient in the H2 balance that ruins the LP conditioning).
                 eff = zd.char_val(tech, "Efficiency (%)", 0.0) / 100.0
@@ -136,7 +130,7 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                     units=max_units, pmin_unit=pmin_unit, pmax_unit=pmax_unit,
                     ramp_up=ramp_pu * units * cfg.ramp_scale,
                     ramp_dn=ramp_dn * units * cfg.ramp_scale,
-                    mustrun=mustrun, pmin_floor=pmin_floor, pmax=cap,
+                    mustrun_pct=mustrun_pct, pmin_floor=pmin_floor, pmax=cap,
                 ))
                 upper[gid] = np.full(H, cap, dtype=float)
 
@@ -173,10 +167,26 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                 avail = np.clip(_num(zd.profiles[col].to_numpy()), 0.0, None)
                 if avail.max() <= 0:
                     continue
+                # "Number of Hours (h)" (DSR blocks ONLY): a daily
+                # activation-hours limit from the source contract/product
+                # definition -- e.g. a block with Hours=1 can only be worth
+                # its full capacity for ~1 hour's worth of energy per day.
+                # Modelled as a continuous daily ENERGY cap (pmax * hours),
+                # not a true discrete hour-count (would need a binary per
+                # hour): with a fixed daily budget, cost-minimization
+                # naturally concentrates dispatch on the highest-value
+                # hour(s) anyway, a close LP-only approximation. inf
+                # (missing data, or non-DSR techs) = no limit -- confirmed
+                # "Other Non-RES1/2/3" carry Hours=0 in this data, which is
+                # an unpopulated-field artifact, not a real activation limit
+                # (PLEXOS actually dispatches them freely); scoping this to
+                # DSR avoids incorrectly zeroing those out.
+                hours_limit = (zd.char_val(tech, "Number of Hours (h)", float("inf"))
+                              if tech.startswith("DSR") else float("inf"))
                 rows.append(dict(
                     gen=gid, zone=z, tech=tech, category=category, h2_fuel=False,
                     mc=_marginal_cost(zd, tech, False, net.co2_price, cfg),
-                    eff=1.0, pmax=float(avail.max())))
+                    eff=1.0, pmax=float(avail.max()), daily_hours_limit=hours_limit))
                 upper[gid] = avail
 
     gens = pd.DataFrame(rows).set_index("gen")
@@ -220,7 +230,7 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
             ("Hydro closed_ps", cap.get("Hydro (closed_ps_turbine) (MW)", 0.0),
              abs(cap.get("Hydro (closed_ps_pump) (MW)", 0.0)),
              e.get("Hydro (closed_ps) (MWh)", 0.0), col("Closed_PS Flow Energy"),
-             cfg.default_pump_efficiency, "electricity"),
+             cfg.default_closed_ps_efficiency, "electricity"),
         ]
         if cfg.enable_h2_storage:
             wd = zd.h2_assets.get("Withdraw (Hydrogen) (MW)", 0.0)      # discharge power
@@ -275,9 +285,9 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     # ---- generation (pure LP, no commitment binary) ---------------------- #
     # Each fleet's output floats between a fixed floor and its available
-    # capacity. The floor is the must-run minimum (mustrun units held at their
-    # minimum stable power); resources with no must-run requirement have a zero
-    # floor, so there is no need for an integer on/off variable.
+    # capacity. The floor is "Must Run (%)" of installed capacity; resources
+    # with no must-run requirement have a zero floor, so there is no need for
+    # an integer on/off variable.
     gen_index = gens.index
     upper_mat = np.vstack([gupper[g] for g in gen_index])
     gen_upper = xr.DataArray(upper_mat, coords={GEN: gen_index, HOUR: hours}, dims=[GEN, HOUR])
@@ -291,6 +301,24 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     commit = gens[gens["category"] == dl.CAT_COMMIT].copy()
     cidx = commit.index
+
+    # ---- daily activation-hours cap (DSR blocks) -------------------------- #
+    # Continuous energy-cap approximation of "Number of Hours (h)" (see
+    # _build_generators): per calendar day, total dispatch <= pmax * hours.
+    if "daily_hours_limit" in gens.columns:
+        capped = gens[np.isfinite(gens["daily_hours_limit"].to_numpy(float))]
+        if len(capped) > 0:
+            cap_idx = capped.index
+            day_budget = xr.DataArray(
+                capped["pmax"].to_numpy(float) * capped["daily_hours_limit"].to_numpy(float),
+                coords={GEN: cap_idx}, dims=[GEN],
+            )
+            gp_capped = gen_p.sel({GEN: cap_idx})
+            n_days = len(hours) // 24
+            for d in range(n_days):
+                day_hours = hours[d * 24:(d + 1) * 24]
+                window = gp_capped.sel({HOUR: day_hours}).sum(HOUR)
+                m.add_constraints(window <= day_budget, name=f"daily_hours_cap_{d}")
 
     # ---- storage --------------------------------------------------------- #
     have_sto = cfg.enable_storage and len(storage) > 0

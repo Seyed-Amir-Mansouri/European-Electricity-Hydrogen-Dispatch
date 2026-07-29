@@ -269,11 +269,24 @@ def hourly_balance_tables(build: BuildResult) -> dict:
         return _zones_on_rows(da.to_pandas(), z).reindex(z).fillna(0.0)
 
     gp = _ids_on_rows(sol["gen_p"]) if not sol["gen_p"].empty else pd.DataFrame()
-    eids, hids = _sto_ids(build, "electricity"), _sto_ids(build, "hydrogen")
-    dis_z = _zone_sum_carrier(sol["dis"], z, H, eids)
-    ch_z = _zone_sum_carrier(sol["ch"], z, H, eids)
-    dis_h2_z = _zone_sum_carrier(sol["dis"], z, H, hids)
-    ch_h2_z = _zone_sum_carrier(sol["ch"], z, H, hids)
+    dis_ids = _ids_on_rows(sol["dis"]) if not sol["dis"].empty else pd.DataFrame()
+    ch_ids = _ids_on_rows(sol["ch"]) if not sol["ch"].empty else pd.DataFrame()
+
+    def storage_kind_cols(zone: str, carrier: str):
+        """Per-device discharge/charge columns, e.g. 'Hydro reservoir discharge (MW)'."""
+        st = build.storage
+        if st.empty:
+            return []
+        out = []
+        rows = st[(st["zone"] == zone) & (st["carrier"] == carrier)]
+        for sid, row in rows.iterrows():
+            kind = row["kind"]
+            dis_s = dis_ids.loc[sid].to_numpy(dtype=float) if sid in dis_ids.index else np.zeros(H)
+            ch_s = ch_ids.loc[sid].to_numpy(dtype=float) if sid in ch_ids.index else np.zeros(H)
+            out.append((f"{kind} discharge (MW)", dis_s))
+            out.append((f"{kind} charge (-) (MW)", -ch_s))
+        return out
+
     ely, term = zrows("ely_p"), zrows("term_h2")
     shed_e, shed_h = zrows("shed_e"), zrows("shed_h")
     dmp_e, dmp_h = zrows("dump_e"), zrows("dump_h")
@@ -318,9 +331,8 @@ def hourly_balance_tables(build: BuildResult) -> dict:
             for gid in gp.index:
                 if gid.split("|", 1)[0] == zone:
                     out.append((gid.split("|", 1)[1], gp.loc[gid].to_numpy()))
+        out += storage_kind_cols(zone, "electricity")
         out += [
-            ("Storage discharge", dis_z.loc[zone]),
-            ("Storage charge (-)", -ch_z.loc[zone]),
             ("Electrolyser load (-)", -ely.loc[zone]),
             ("Net line import", net_e.loc[zone]),
             ("External exchange", ext_e.loc[zone]),
@@ -339,8 +351,9 @@ def hourly_balance_tables(build: BuildResult) -> dict:
             ("Terminal import", term.loc[zone]),
             ("Net pipeline import", net_h.loc[zone]),
             ("External exchange", ext_h.loc[zone]),
-            ("H2 storage discharge", dis_h2_z.loc[zone]),
-            ("H2 storage charge (-)", -ch_h2_z.loc[zone]),
+        ]
+        out += storage_kind_cols(zone, "hydrogen")
+        out += [
             ("Load shedding", shed_h.loc[zone]),
             ("Dumped/curtailed (-)", -dmp_h.loc[zone]),
             ("H2 plant consumption (-)", -h2_cons.loc[zone]),

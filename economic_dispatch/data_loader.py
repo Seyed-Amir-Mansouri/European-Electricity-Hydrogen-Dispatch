@@ -52,13 +52,16 @@ class ZoneData:
         except (TypeError, ValueError):
             return default
 
-    def must_run_units(self, tech: str, month: int) -> float:
-        """Minimum committed units for the given 0-based month.
+    def must_run_pct(self, tech: str, month: int) -> float:
+        """Must-run share for the given 0-based month, as % of installed capacity.
 
         The column holds either a scalar or a comma-separated 12-value string.
+        ("Must Run (Number of units)" is a separate, unreliable column in this
+        data -- it is 0 for fleets that "Must Run (%)" shows as partially
+        must-run, so the floor is computed from the %-of-capacity column.)
         """
         try:
-            raw = self.char.at[tech, "Must Run (Number of units)"]
+            raw = self.char.at[tech, "Must Run (%)"]
         except KeyError:
             return 0.0
         return _month_value(raw, month)
@@ -190,17 +193,20 @@ def load_zones_from_db(codes: list[str], db_path: Path,
 def classify(tech: str) -> tuple[str, bool]:
     """Map a Technology-Capacities row name to (category, is_h2_fuel).
 
-    ``is_h2_fuel`` marks committable plants that consume hydrogen (drawn from the
-    H2 balance) rather than an exogenous fuel.
+    ``is_h2_fuel`` marks committable plants that consume hydrogen drawn from
+    the H2 balance rather than an exogenous fuel. Hydrogen (fc)/(ccgt) are
+    NOT flagged this way: their "Fuel (EUR/MWh)" is a real, priced fuel input
+    (like natural gas for a Gas plant) -- not sourced from the modelled H2
+    network -- so they are priced and dispatched exactly like any other
+    thermal fleet (fuel/CO2 cost divided by efficiency, must-run floor, ramp).
     """
     t = tech
-    # Hydrogen-fired dispatchable plants (consume H2 from the network)
-    if t.startswith("Hydrogen (fc)") or t.startswith("Hydrogen (ccgt)"):
-        return CAT_COMMIT, True
-    # Conventional thermal fleet with exogenous fuel
+    # Conventional thermal fleet with exogenous fuel (Hydrogen ccgt/fc included:
+    # priced the same way, not drawing from the H2 balance -- see docstring).
     if (t.startswith("Nuclear") or t.startswith("Hard Coal") or t.startswith("Lignite")
             or t.startswith("Gas (") or t.startswith("Light Oil")
-            or t.startswith("Heavy oil") or t.startswith("Oil shale")):
+            or t.startswith("Heavy oil") or t.startswith("Oil shale")
+            or t.startswith("Hydrogen (fc)") or t.startswith("Hydrogen (ccgt)")):
         return CAT_COMMIT, False
     # Variable renewables (profile is a 0-1 capacity factor)
     if t.startswith("Wind (") or t.startswith("Solar ("):

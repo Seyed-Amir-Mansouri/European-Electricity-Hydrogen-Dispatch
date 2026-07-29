@@ -84,13 +84,23 @@ class RunConfig:
     # Marginal cost = VOM Price + fuel_term + co2_term, where
     #   fuel_term = Fuel / eff  if fuel_per_thermal else Fuel
     #   co2_term  = (CO2Factor / eff if co2_per_thermal else CO2Factor) * CO2Price
-    # Both the Fuel and CO2Factor columns are already per MWh_elec (per power
-    # generation), so neither is divided by efficiency. Flip a flag to True only
-    # if the corresponding column is provided per MWh_thermal instead.
-    fuel_per_thermal: bool = False
-    co2_per_thermal: bool = False
+    # The Fuel and CO2Factor columns are both per MWh_thermal (fuel input, NCV
+    # basis) -- e.g. every Gas sub-fleet shares the same ~22.6 EUR/MWh fuel
+    # price and 0.1857 t/MWh CO2 factor regardless of efficiency, confirmed
+    # against the ENTSO-E "Common Data" reference (Fuel & CO2 price inputs are
+    # commodity-basis, not per-MWh_elec) -- so both must be divided by
+    # efficiency, or fleets of very different efficiency end up with the same
+    # marginal cost and the LP can't tell an OCGT from a CCGT. Validated against
+    # PLEXOS: with co2_per_thermal=False the model's price sat ~9.50 EUR/MWh
+    # below PLEXOS on average (non-scarcity hours); flipping it to True (this
+    # default) cuts that to +1.67 EUR/MWh -- Gas (ccgt_pre2), the largest and
+    # cheapest flexible fleet (sets price ~30% of hours), was understated by
+    # 15.25 EUR/MWh without this term. See Formulation.md Sec 8.
+    fuel_per_thermal: bool = True
+    co2_per_thermal: bool = True
     default_efficiency: float = 0.5    # fallback when Efficiency is 0/missing
-    voll_eur_per_mwh: float = 10_000.0  # value of lost load (elec & H2 shedding penalty)
+    voll_eur_per_mwh: float = 3_000.0  # value of lost load (elec & H2 shedding penalty),
+                                        # matching PLEXOS's own scarcity price for DE00
     h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)
     dump_penalty_eur_per_mwh: float = 0.0  # penalty for dumping/curtailing excess supply
     # Small per-MWh cost on storage throughput (charge + discharge), to forbid
@@ -104,7 +114,15 @@ class RunConfig:
     # --- Physics defaults --------------------------------------------------
     initial_soc_fraction: float = 0.5  # storage state of charge at hour 0
     ramp_scale: float = 1.0            # multiplier on ramp-rate column
-    default_pump_efficiency: float = 0.8   # round-trip eff for pumped hydro if missing
+    default_pump_efficiency: float = 0.8   # round-trip eff for open-loop pumped hydro
+    # closed_ps gets its own figure rather than sharing default_pump_efficiency:
+    # replaying PLEXOS's own hourly turbine/pump MW for DE00 through this
+    # model's SoC recursion, sum(discharge)/sum(charge) is 0.8015 for open_ps
+    # (matches the 0.8 default almost exactly) but 0.7500 for closed_ps -- at
+    # 0.75 closed_ps's SoC trajectory fits its declared energy capacity almost
+    # exactly (touches both 0 and the cap over the year); at 0.8 it would still
+    # balance, just with slack to spare. See Formulation.md Sec 14.5.
+    default_closed_ps_efficiency: float = 0.75  # round-trip eff for closed-loop pumped hydro
     # H2 storage energy capacity (MWh) = Withdraw (Hydrogen) power x h2_storage_hours.
     # ASSUMPTION: the data gives only injection/withdrawal power, no energy capacity.
     h2_storage_hours: float = 168.0
