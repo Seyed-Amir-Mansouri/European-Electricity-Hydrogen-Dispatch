@@ -115,6 +115,15 @@ class RunConfig:
     # dispatches the electrolyser exogenously (outside this LP's economic
     # dispatch). See marginal_price_loader.DEFAULT_ELECTROLYSER_LOAD_DB.
     fix_electrolyser_to_plexos: bool = False
+    # Subtract PLEXOS's own "Demand Side Response Implicit [MW]" from the
+    # electricity demand target, matching how PLEXOS itself defines net
+    # demand (this is a signed correction -- activation reduces net demand,
+    # deactivation raises it -- not a one-directional relief term). Needed
+    # for a fair price-tracking comparison against PLEXOS: without it,
+    # DE00's full-year correlation vs PLEXOS regressed from 0.978 to 0.88
+    # even after fixing the priced_external_elec sign bug; with both fixes
+    # together it's back to 0.978. See marginal_price_loader.DEFAULT_DSR_IMPLICIT_DB.
+    subtract_dsr_implicit: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

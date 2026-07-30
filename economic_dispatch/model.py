@@ -503,6 +503,19 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     # ---- demand / fixed exchange ---------------------------------------- #
     demand_e = _profile_da(zdata, zones, hours, "Electricity Demand Profile")
     demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile")
+    if cfg.subtract_dsr_implicit:
+        # PLEXOS's own "Demand Side Response Implicit [MW]" is a signed
+        # correction (activation reduces net demand, deactivation raises it)
+        # PLEXOS applies on top of raw demand; our own demand target should
+        # match it for a fair price comparison. Validated on DE00 (part of
+        # closing a correlation regression from 0.74 -> 0.98 alongside the
+        # priced_external_elec sign fix).
+        from . import marginal_price_loader as mpl
+        h0, h1 = cfg.hour_slice()
+        ghours = pd.RangeIndex(h0, h1)
+        dsr_df = mpl.load_zone_series(zones, ghours, mpl.DEFAULT_DSR_IMPLICIT_DB)
+        dsr_da = xr.DataArray(dsr_df.to_numpy().T, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+        demand_e = demand_e - dsr_da
     ext_e_obj = 0.0
     if cfg.priced_external_elec:
         external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
@@ -672,8 +685,11 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     pairs = sorted(legs)  # [(zone, neighbor), ...], deterministic order
     pname = "extleg"
     pidx = pd.Index([f"{z}|{n}" for z, n in pairs], name=pname)
-    imp_cap = np.vstack([np.clip(legs[p][h0:h1], 0.0, None) for p in pairs])   # zone imports (MW)
-    exp_cap = np.vstack([np.clip(-legs[p][h0:h1], 0.0, None) for p in pairs])  # zone exports (MW)
+    # elec_border_legs' sign convention is + = zone EXPORTS to that neighbour
+    # (matches exports_loader.elec_net_export), so the import cap is the
+    # NEGATIVE part of the signed leg and the export cap is the positive part.
+    imp_cap = np.vstack([np.clip(-legs[p][h0:h1], 0.0, None) for p in pairs])  # zone imports (MW)
+    exp_cap = np.vstack([np.clip(legs[p][h0:h1], 0.0, None) for p in pairs])   # zone exports (MW)
 
     neighbors = sorted({n for _, n in pairs})
     ghours = pd.RangeIndex(h0, h1)
