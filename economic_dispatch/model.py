@@ -212,7 +212,19 @@ def _build_generators(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConf
                     eff=1.0, pmax=float(avail.max()), daily_hours_limit=hours_limit))
                 upper[gid] = avail
 
-    gens = pd.DataFrame(rows).set_index("gen")
+    if rows:
+        gens = pd.DataFrame(rows).set_index("gen")
+    else:
+        # A zone can legitimately have zero generators (e.g. a pure
+        # interconnector/offshore node with no local demand and a capacity
+        # whose availability profile is all-zero, like BEOF) -- an empty
+        # gens table with the columns every downstream lookup needs (zone,
+        # category, h2_fuel, mc, eff, pmax) is a valid, solvable case (zero
+        # generation, balance closes via network flows/shed/dump), not an
+        # error.
+        gens = pd.DataFrame(
+            columns=["zone", "tech", "category", "h2_fuel", "mc", "eff", "pmax"]
+        ).set_index(pd.Index([], name="gen"))
     return gens, upper
 
 
@@ -255,7 +267,7 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
              e.get("Hydro (closed_ps) (MWh)", 0.0), col("Closed_PS Flow Energy"),
              cfg.default_closed_ps_efficiency, "electricity"),
         ]
-        if cfg.enable_h2_storage:
+        if cfg.enable_h2_storage and not cfg.electricity_only:
             wd = zd.h2_assets.get("Withdraw (Hydrogen) (MW)", 0.0)      # discharge power
             inj = zd.h2_assets.get("Injection (Hydrogen) (MW)", 0.0)   # charge power
             specs.append(("H2 storage", wd, inj, wd * cfg.h2_storage_hours, zero,
@@ -335,7 +347,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     # with no must-run requirement have a zero floor, so there is no need for
     # an integer on/off variable -- except uc_gens, optionally (see below).
     gen_index = gens.index
-    upper_mat = np.vstack([gupper[g] for g in gen_index])
+    upper_mat = np.vstack([gupper[g] for g in gen_index]) if len(gen_index) > 0 else np.zeros((0, H))
     gen_upper = xr.DataArray(upper_mat, coords={GEN: gen_index, HOUR: hours}, dims=[GEN, HOUR])
     floor_vec = np.nan_to_num(gens["pmin_floor"].to_numpy(float)) \
         if "pmin_floor" in gens.columns else np.zeros(len(gen_index))
@@ -465,11 +477,13 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         dis_h2_by_zone = ch_h2_by_zone = 0.0
 
     # ---- electrolysers & H2 terminals ----------------------------------- #
+    # ely_p always exists (it subtracts from the elec balance either way);
+    # everything else in this block is hydrogen-side and skipped under
+    # cfg.electricity_only.
     ely_cap = np.array([zdata[z].capacities.get("Electrolyser (MW)", 0.0) for z in zones])
     ely_eff = np.array([max(zdata[z].char_val("Electrolyser (MW)", "Efficiency (%)", 68.0) / 100.0, 1e-6)
                         for z in zones])
     ely_p = m.add_variables(lower=0.0, upper=_bc_z(ely_cap, zidx, hours), name="ely_p")
-    ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
 
     if cfg.fix_electrolyser_to_plexos:
         # Pin electrolyser consumption to PLEXOS's own historical dispatch
@@ -484,25 +498,30 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         ely_fixed_da = xr.DataArray(ely_hist, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
         m.add_constraints(ely_p == ely_fixed_da, name="ely_p_fixed")
 
-    if cfg.enable_h2_terminal:
-        term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
+    if not cfg.electricity_only:
+        ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
+        if cfg.enable_h2_terminal:
+            term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
+        else:
+            term_cap = np.zeros(len(zones))
+        term_h2 = m.add_variables(lower=0.0, upper=_bc_z(term_cap, zidx, hours), name="term_h2")
+
+        # H2 consumed by hydrogen-fired plants: gen_p / eff, mapped to zone
+        A_h2 = A_gen.copy()
+        h2_coeff = np.where(gens["h2_fuel"].to_numpy(), 1.0 / gens["eff"].to_numpy(), 0.0)
+        A_h2 = A_h2 * xr.DataArray(h2_coeff, coords={GEN: gen_index}, dims=[GEN])
+        h2_cons_by_zone = (A_h2 * gen_p).sum(GEN)
     else:
         term_cap = np.zeros(len(zones))
-    term_h2 = m.add_variables(lower=0.0, upper=_bc_z(term_cap, zidx, hours), name="term_h2")
-
-    # H2 consumed by hydrogen-fired plants: gen_p / eff, mapped to zone
-    A_h2 = A_gen.copy()
-    h2_coeff = np.where(gens["h2_fuel"].to_numpy(), 1.0 / gens["eff"].to_numpy(), 0.0)
-    A_h2 = A_h2 * xr.DataArray(h2_coeff, coords={GEN: gen_index}, dims=[GEN])
-    h2_cons_by_zone = (A_h2 * gen_p).sum(GEN)
 
     # ---- network flows (split directional, loss on receiving end) -------- #
     net_e, fe_pos, fe_neg = _flow_terms(m, net.elec, zones, hours, "e")
-    net_h, fh_pos, fh_neg = _flow_terms(m, net.hydrogen, zones, hours, "h")
+    net_h, fh_pos, fh_neg = (0.0, None, None) if cfg.electricity_only \
+        else _flow_terms(m, net.hydrogen, zones, hours, "h")
 
     # ---- demand / fixed exchange ---------------------------------------- #
     demand_e = _profile_da(zdata, zones, hours, "Electricity Demand Profile")
-    demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile")
+    demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile") if not cfg.electricity_only else None
     if cfg.subtract_dsr_implicit:
         # PLEXOS's own "Demand Side Response Implicit [MW]" is a signed
         # correction (activation reduces net demand, deactivation raises it)
@@ -524,12 +543,13 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         external_e, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
-    shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
     # Dump/curtailment slacks absorb EXCESS supply (e.g. a fixed net import that
     # exceeds absorbable load) — the counterpart of shedding, as in PLEXOS's
     # "Dumped" category. Without them the equality balance can be infeasible.
     dump_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="dump_e")
-    dump_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="dump_h")
+    if not cfg.electricity_only:
+        shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
+        dump_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="dump_h")
 
     # ---- balances -------------------------------------------------------- #
     # external_e / external_h2 are net imports (import +), so they add to supply.
@@ -537,10 +557,11 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
                 + external_e + shed_e - dump_e)
     m.add_constraints(elec_lhs == demand_e, name="elec_balance")
 
-    h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2
-              + dis_h2_by_zone - ch_h2_by_zone + shed_h
-              - h2_cons_by_zone - dump_h)
-    m.add_constraints(h2_lhs == demand_h, name="h2_balance")
+    if not cfg.electricity_only:
+        h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2
+                  + dis_h2_by_zone - ch_h2_by_zone + shed_h
+                  - h2_cons_by_zone - dump_h)
+        m.add_constraints(h2_lhs == demand_h, name="h2_balance")
 
     # ---- ramps ----------------------------------------------------------- #
     # uc_gens are excluded here (in both MILP and fixed-profile passes): with
@@ -569,10 +590,14 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     # ---- objective ------------------------------------------------------- #
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
-    obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
-        + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
-        + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum()) \
+    obj = (mc * gen_p).sum() \
+        + cfg.voll_eur_per_mwh * shed_e.sum() \
+        + cfg.dump_penalty_eur_per_mwh * dump_e.sum() \
         + uc_startup_obj + ext_e_obj
+    if not cfg.electricity_only:
+        obj = obj + cfg.h2_terminal_price * term_h2.sum() \
+            + cfg.voll_eur_per_mwh * shed_h.sum() \
+            + cfg.dump_penalty_eur_per_mwh * dump_h.sum()
     # A small per-MWh throughput cost on every storage device forbids charging
     # and discharging in the same hour without a binary. It is not needed for
     # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
@@ -603,7 +628,7 @@ def marginal_prices(build: BuildResult):
     ``balance == demand`` is d(cost)/d(demand) = the marginal price of supply.
     """
     price_e = build.model.constraints["elec_balance"].dual
-    price_h = build.model.constraints["h2_balance"].dual
+    price_h = build.model.constraints["h2_balance"].dual if not build.cfg.electricity_only else None
     return price_e, price_h
 
 

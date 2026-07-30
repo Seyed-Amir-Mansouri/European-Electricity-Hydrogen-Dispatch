@@ -124,6 +124,14 @@ class RunConfig:
     # even after fixing the priced_external_elec sign bug; with both fixes
     # together it's back to 0.978. See marginal_price_loader.DEFAULT_DSR_IMPLICIT_DB.
     subtract_dsr_implicit: bool = False
+    # Skip the hydrogen side of the model entirely (no H2 balance, H2
+    # storage, H2 terminal imports, or H2 network flows) -- for
+    # electricity-only price-tracking validation runs. Hydrogen-fired
+    # plants (h2_fuel=True) still dispatch normally (their cost is just VOM,
+    # independent of any H2 balance either way); the electrolyser's
+    # electricity consumption still subtracts from the elec balance as
+    # usual. Cuts LP size substantially at multi-zone scale.
+    electricity_only: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where
