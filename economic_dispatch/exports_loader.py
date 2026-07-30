@@ -56,6 +56,26 @@ def elec_net_export(selected: list[str], edf: pd.DataFrame) -> dict[str, np.ndar
     return out
 
 
+def elec_border_legs(selected: list[str], edf: pd.DataFrame) -> dict[tuple[str, str], np.ndarray]:
+    """Per-(zone, external neighbour) signed net flow (MW, + = zone exports to
+    that neighbour), full-year arrays -- same sign convention as
+    ``elec_net_export`` but keyed by neighbour instead of summed across all of
+    a zone's external borders. Used to price each cross-border leg separately
+    against its own neighbour's marginal price (model.py's
+    ``priced_external_elec``) rather than treating a zone's external exchange
+    as one fixed, unpriced net injection.
+    """
+    sel = set(selected)
+    out: dict[tuple[str, str], np.ndarray] = {}
+    for f in _flow_cols(edf):
+        a, b = f.split("->")
+        if a in sel and b not in sel:
+            out[(a, b)] = out.get((a, b), 0.0) + _num(edf[f])
+        elif b in sel and a not in sel:
+            out[(b, a)] = out.get((b, a), 0.0) - _num(edf[f])
+    return out
+
+
 def _cc(node: str) -> str:
     """Country code of an H2 node header (strip the ``_H2`` suffix)."""
     return node[:-3] if node.endswith("_H2") else node

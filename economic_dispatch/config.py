@@ -28,6 +28,12 @@ DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "inputs"
 DEFAULT_ZONES_DB = DEFAULT_EXPORTS_DIR / "zones_2030.parquet"
 DEFAULT_NETWORKS_DB = DEFAULT_EXPORTS_DIR / "networks_2030.parquet"
 DEFAULT_H2_REF = DEFAULT_EXPORTS_DIR / "ReferenceGrid_Hydrogen.xlsx"
+# PLEXOS reference output (source of truth for marginal prices outside this
+# model's own solve -- e.g. pricing cross-border trade against each
+# neighbour's own realized marginal cost; see marginal_price_loader.py).
+DEFAULT_PLEXOS_REF = DEFAULT_DATA_DIR / "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx"
+DEFAULT_MARGINAL_PRICE_ELEC_DB = DEFAULT_EXPORTS_DIR / "marginal_price_electricity_2030.parquet"
+DEFAULT_MARGINAL_PRICE_H2_DB = DEFAULT_EXPORTS_DIR / "marginal_price_hydrogen_2030.parquet"
 
 HOURS_PER_DAY = 24
 HOURS_PER_YEAR = 8736  # 364 days * 24
@@ -92,6 +98,23 @@ class RunConfig:
     # >=MinTime-long committed runs); system-wide price/shed are unaffected
     # at this scale. See Formulation.md Sec 9a.
     enable_uc: bool = False
+    # Electricity-only, external-trade pricing: replace the fixed, unpriced
+    # net external exchange (exports_loader) with per-neighbour controllable
+    # import/export legs, each capped at that leg's historical (PLEXOS-
+    # realized) flow and priced at the neighbour's OWN PLEXOS marginal price
+    # (0 if the neighbour has no PLEXOS price data, e.g. outside the modelled
+    # ENTSO-E area). Only affects the electricity balance; hydrogen external
+    # exchange is unaffected. Validated on DE00 alone first (correlation vs
+    # PLEXOS 0.86 -> 0.978, RMSE 18.27 -> 7.36 EUR/MWh excl. scarcity) before
+    # being generalised to every zone's own external borders. See
+    # model._priced_external_elec / exports_loader.elec_border_legs.
+    priced_external_elec: bool = False
+    # Fix each zone's electrolyser electricity consumption to PLEXOS's own
+    # historical "Electrolyser (load) [MW]" profile instead of letting the LP
+    # optimise it -- for price-tracking validation against PLEXOS, which
+    # dispatches the electrolyser exogenously (outside this LP's economic
+    # dispatch). See marginal_price_loader.DEFAULT_ELECTROLYSER_LOAD_DB.
+    fix_electrolyser_to_plexos: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

@@ -20,6 +20,7 @@ needed by report.py to extract and validate the solution.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import linopy
 import numpy as np
@@ -470,6 +471,19 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     ely_p = m.add_variables(lower=0.0, upper=_bc_z(ely_cap, zidx, hours), name="ely_p")
     ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
 
+    if cfg.fix_electrolyser_to_plexos:
+        # Pin electrolyser consumption to PLEXOS's own historical dispatch
+        # (exogenous to this LP) instead of letting it optimise -- used for
+        # price-tracking validation. Clip to this model's own capacity so the
+        # equality can't exceed ely_p's upper bound.
+        from . import marginal_price_loader as mpl
+        h0, h1 = cfg.hour_slice()
+        ghours = pd.RangeIndex(h0, h1)
+        ely_hist = mpl.load_zone_series(zones, ghours, mpl.DEFAULT_ELECTROLYSER_LOAD_DB).to_numpy().T
+        ely_hist = np.minimum(np.clip(ely_hist, 0.0, None), np.vstack([ely_cap] * H).T)
+        ely_fixed_da = xr.DataArray(ely_hist, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+        m.add_constraints(ely_p == ely_fixed_da, name="ely_p_fixed")
+
     if cfg.enable_h2_terminal:
         term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
     else:
@@ -489,7 +503,12 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     # ---- demand / fixed exchange ---------------------------------------- #
     demand_e = _profile_da(zdata, zones, hours, "Electricity Demand Profile")
     demand_h = _profile_da(zdata, zones, hours, "Hydrogen Demand Profile")
-    external_e, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
+    ext_e_obj = 0.0
+    if cfg.priced_external_elec:
+        external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
+        _, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
+    else:
+        external_e, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     shed_h = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_h")
@@ -540,7 +559,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     obj = (mc * gen_p).sum() + cfg.h2_terminal_price * term_h2.sum() \
         + cfg.voll_eur_per_mwh * (shed_e.sum() + shed_h.sum()) \
         + cfg.dump_penalty_eur_per_mwh * (dump_e.sum() + dump_h.sum()) \
-        + uc_startup_obj
+        + uc_startup_obj + ext_e_obj
     # A small per-MWh throughput cost on every storage device forbids charging
     # and discharging in the same hour without a binary. It is not needed for
     # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
@@ -627,6 +646,56 @@ def _h2_main_zones(zdata, zones) -> dict[str, str]:
         if c not in best or d > dem[c]:
             best[c], dem[c] = z, d
     return best
+
+
+def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cfg: RunConfig):
+    """Priced/controllable import & export legs for every zone's EXTERNAL
+    neighbours (any neighbour outside ``zones``): each leg is a decision
+    variable capped at that leg's historical (PLEXOS-realized) flow, priced
+    at the neighbour's own PLEXOS marginal price (0 if the neighbour has no
+    PLEXOS price data). Returns (net_injection_expr, objective_cost_expr) to
+    use in place of the fixed ``external_e`` term -- see
+    ``cfg.priced_external_elec``.
+    """
+    from . import marginal_price_loader as mpl
+
+    zidx = pd.Index(zones, name=ZONE)
+    edf = pd.read_parquet(Path(cfg.exports_dir) / "crossborder_electricity_2030.parquet")
+    legs = exports_loader.elec_border_legs(zones, edf)  # {(zone, neighbor): signed full-year array}
+
+    if not legs:
+        zero = xr.DataArray(np.zeros((len(zones), len(hours))),
+                            coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+        return zero, 0.0
+
+    h0, h1 = cfg.hour_slice()
+    pairs = sorted(legs)  # [(zone, neighbor), ...], deterministic order
+    pname = "extleg"
+    pidx = pd.Index([f"{z}|{n}" for z, n in pairs], name=pname)
+    imp_cap = np.vstack([np.clip(legs[p][h0:h1], 0.0, None) for p in pairs])   # zone imports (MW)
+    exp_cap = np.vstack([np.clip(-legs[p][h0:h1], 0.0, None) for p in pairs])  # zone exports (MW)
+
+    neighbors = sorted({n for _, n in pairs})
+    ghours = pd.RangeIndex(h0, h1)
+    price_df = mpl.load_zone_series(neighbors, ghours, mpl.DEFAULT_MARGINAL_PRICE_ELEC_DB)
+    price_mat = np.vstack([price_df[n].to_numpy() for _, n in pairs])  # (npairs, H)
+
+    imp_cap_da = xr.DataArray(imp_cap, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+    exp_cap_da = xr.DataArray(exp_cap, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+    price_da = xr.DataArray(price_mat, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+
+    imp = m.add_variables(lower=0.0, upper=imp_cap_da, name="ext_imp")
+    exp = m.add_variables(lower=0.0, upper=exp_cap_da, name="ext_exp")
+
+    A = np.zeros((len(pairs), len(zones)))
+    zpos = {z: i for i, z in enumerate(zones)}
+    for i, (z, _n) in enumerate(pairs):
+        A[i, zpos[z]] = 1.0
+    A_da = xr.DataArray(A, coords={pname: pidx, ZONE: zidx}, dims=[pname, ZONE])
+
+    net_injection = (A_da * imp).sum(pname) - (A_da * exp).sum(pname)
+    obj = (price_da * imp).sum() - (price_da * exp).sum()
+    return net_injection, obj
 
 
 def _external_exchange_all(zdata, zones, hours, cfg):
