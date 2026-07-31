@@ -363,6 +363,9 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
             gen_lower.loc[{GEN: gid}] = msl_frac * prof  # prof is 0 (off) or pmax (on)
     gen_p = m.add_variables(lower=gen_lower, upper=gen_upper, name="gen_p")
 
+    if cfg.cap_renewables_to_plexos:
+        _cap_renewables_to_plexos(m, gens, gen_p, zones, hours, cfg)
+
     A_gen = _incidence(gens["zone"], zones, GEN)
     gen_by_zone = (A_gen * gen_p).sum(GEN)
 
@@ -761,6 +764,52 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     net_injection = (A_da * imp).sum(pname) - (A_da * exp).sum(pname)
     obj = (price_da * imp).sum() - (price_da * exp).sum()
     return net_injection, obj
+
+
+def _cap_renewables_to_plexos(m: linopy.Model, gens: pd.DataFrame, gen_p, zones: list[str],
+                              hours: pd.Index, cfg: RunConfig) -> None:
+    """Cap every renewable generator's availability at PLEXOS's own realized
+    generation for that technology, instead of this model's own capacity x
+    capacity-factor profile -- see cfg.cap_renewables_to_plexos. Adds
+    constraints directly to ``m`` in place; nothing to return."""
+    from . import marginal_price_loader as mpl
+
+    h0, h1 = cfg.hour_slice()
+    ghours = pd.RangeIndex(h0, h1)
+    gidx = set(gens.index)
+
+    def _plexos(db_path) -> pd.DataFrame:
+        return mpl.load_zone_series(zones, ghours, db_path)
+
+    for key, tech, db in [
+        ("wind_onshore", "Wind (onshore) (MW)", mpl.DEFAULT_WIND_ONSHORE_DB),
+        ("wind_offshore", "Wind (offshore) (MW)", mpl.DEFAULT_WIND_OFFSHORE_DB),
+        ("ror", "Hydro (river) (MW)", mpl.DEFAULT_ROR_DB),
+    ]:
+        px = _plexos(db)
+        for z in zones:
+            gid = f"{z}|{tech}"
+            if gid not in gidx:
+                continue
+            cap_da = xr.DataArray(px[z].to_numpy(), coords={HOUR: hours}, dims=[HOUR])
+            m.add_constraints(gen_p.sel({GEN: gid}) <= cap_da, name=f"plexos_cap_{key}_{z}")
+
+    for key, techs, db in [
+        ("solar_pv", ["Solar (MW)", "Solar (rooftop) (MW)"], mpl.DEFAULT_SOLAR_PV_DB),
+        ("solar_thermal", ["Solar (thermal) (MW)", "Solar (thermal_with_storage) (MW)"],
+         mpl.DEFAULT_SOLAR_THERMAL_DB),
+        ("other_res", ["Other RES (biomass) (MW)", "Other RES (geothermal) (MW)",
+                       "Other RES (marine) (MW)", "Other RES (waste) (MW)", "Other RES (unknown) (MW)"],
+         mpl.DEFAULT_OTHER_RES_DB),
+    ]:
+        px = _plexos(db)
+        for z in zones:
+            present = [f"{z}|{t}" for t in techs if f"{z}|{t}" in gidx]
+            if not present:
+                continue
+            cap_da = xr.DataArray(px[z].to_numpy(), coords={HOUR: hours}, dims=[HOUR])
+            expr = sum(gen_p.sel({GEN: gid}) for gid in present)
+            m.add_constraints(expr <= cap_da, name=f"plexos_cap_{key}_{z}")
 
 
 def _external_exchange_all(zdata, zones, hours, cfg):

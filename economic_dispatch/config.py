@@ -136,6 +136,25 @@ class RunConfig:
     # electricity consumption still subtracts from the elec balance as
     # usual. Cuts LP size substantially at multi-zone scale.
     electricity_only: bool = False
+    # Cap every renewable generator's availability at PLEXOS's own realized
+    # generation for that technology, instead of this model's own
+    # capacity x capacity-factor profile: single-variable techs (wind
+    # onshore, wind offshore, run-of-river) get gen_p <= PLEXOS value
+    # directly; techs where this model splits one PLEXOS category across
+    # several of its own generators (solar PV = Solar + Solar (rooftop);
+    # solar thermal = Solar (thermal) + Solar (thermal_with_storage); other
+    # renewables = the 5 Other RES sub-types) get a joint sum(gen_p) <=
+    # PLEXOS value constraint instead, since PLEXOS doesn't publish that
+    # split. Zones with no PLEXOS data for a technology, or no generator of
+    # that technology in this model to begin with, are skipped -- this can
+    # only ever tighten (never raise) an existing generator's ceiling, so it
+    # doesn't help zones where this model's own data is an UNDER-estimate
+    # (e.g. NL00's solar PV). Validated single-zone across all 21 CORE
+    # zones on top of priced_external_elec: mean corr 0.958 -> 0.958 (small
+    # but real gains for the 2 zones where this model's own renewable data
+    # was an OVER-estimate, e.g. SK00's run-of-river 0.928 -> 0.938).
+    # See model._cap_renewables_to_plexos.
+    cap_renewables_to_plexos: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

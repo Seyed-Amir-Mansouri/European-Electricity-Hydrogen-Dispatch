@@ -34,6 +34,18 @@ from .config import (
 
 DEFAULT_DSR_IMPLICIT_DB = DEFAULT_EXPORTS_DIR / "dsr_implicit_electricity_2030.parquet"
 DEFAULT_ELECTROLYSER_LOAD_DB = DEFAULT_EXPORTS_DIR / "electrolyser_load_electricity_2030.parquet"
+# PLEXOS's own realized renewable generation, used to cap our VRES/ROR/Other
+# RES generators at PLEXOS's max-available power (model.py's
+# cfg.cap_renewables_to_plexos) -- since these are effectively zero-cost
+# must-take resources, PLEXOS's realized generation IS its available power
+# (validated: matches our own capacity x profile almost exactly for the
+# large majority of zones/technologies).
+DEFAULT_WIND_ONSHORE_DB = DEFAULT_EXPORTS_DIR / "wind_onshore_electricity_2030.parquet"
+DEFAULT_WIND_OFFSHORE_DB = DEFAULT_EXPORTS_DIR / "wind_offshore_electricity_2030.parquet"
+DEFAULT_ROR_DB = DEFAULT_EXPORTS_DIR / "ror_electricity_2030.parquet"
+DEFAULT_SOLAR_PV_DB = DEFAULT_EXPORTS_DIR / "solar_pv_electricity_2030.parquet"
+DEFAULT_SOLAR_THERMAL_DB = DEFAULT_EXPORTS_DIR / "solar_thermal_electricity_2030.parquet"
+DEFAULT_OTHER_RES_DB = DEFAULT_EXPORTS_DIR / "other_res_electricity_2030.parquet"
 
 # sheet name, row holding "Category", row holding "Country"/zone code, first data row
 _ELEC_SHEET = ("Hourly Market Data", 11, 12, 14)
@@ -85,13 +97,21 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
                             out_h2: Path = DEFAULT_MARGINAL_PRICE_H2_DB,
                             out_dsr_implicit: Path = DEFAULT_DSR_IMPLICIT_DB,
                             out_electrolyser: Path = DEFAULT_ELECTROLYSER_LOAD_DB,
+                            out_wind_onshore: Path = DEFAULT_WIND_ONSHORE_DB,
+                            out_wind_offshore: Path = DEFAULT_WIND_OFFSHORE_DB,
+                            out_ror: Path = DEFAULT_ROR_DB,
+                            out_solar_pv: Path = DEFAULT_SOLAR_PV_DB,
+                            out_solar_thermal: Path = DEFAULT_SOLAR_THERMAL_DB,
+                            out_other_res: Path = DEFAULT_OTHER_RES_DB,
                             n_hours: int = HOURS_PER_YEAR) -> dict[str, Path]:
     """Extract every zone's/country's hourly marginal price (electricity +
-    hydrogen), Demand Side Response Implicit, and Electrolyser (load) from
-    the PLEXOS reference workbook, and write them as wide parquet databases.
-    Slow-ish (a couple minutes: the electricity sheet is ~4,200 columns
-    wide, so the single pass over it dominates) -- a one-time build step,
-    not part of the model's runtime hot path."""
+    hydrogen), Demand Side Response Implicit, Electrolyser (load), and every
+    renewable generation category (wind on/offshore, run-of-river, solar PV,
+    solar thermal, other renewables) from the PLEXOS reference workbook, and
+    write them as wide parquet databases. Slow-ish (a couple minutes: the
+    electricity sheet is ~4,200 columns wide, so the single pass over it
+    dominates) -- a one-time build step, not part of the model's runtime hot
+    path."""
     import openpyxl
     wb = openpyxl.load_workbook(ref_path, read_only=True, data_only=True)
     written = {}
@@ -102,9 +122,18 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
             "price": "Marginal Cost",
             "dsr_implicit": "Demand Side Response Implicit",
             "electrolyser": "Electrolyser (load)",
+            "wind_onshore": "Wind Onshore",
+            "wind_offshore": "Wind Offshore",
+            "ror": "Run-of-River",
+            "solar_pv": "Solar (Photovoltaic)",
+            "solar_thermal": "Solar (Thermal)",
+            "other_res": "Others renewable",
         }, n_hours)
         for key, out_path in [("price", out_elec), ("dsr_implicit", out_dsr_implicit),
-                              ("electrolyser", out_electrolyser)]:
+                              ("electrolyser", out_electrolyser),
+                              ("wind_onshore", out_wind_onshore), ("wind_offshore", out_wind_offshore),
+                              ("ror", out_ror), ("solar_pv", out_solar_pv),
+                              ("solar_thermal", out_solar_thermal), ("other_res", out_other_res)]:
             df = elec[key]
             out_path.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(out_path, compression="zstd")
