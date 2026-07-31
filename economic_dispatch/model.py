@@ -335,6 +335,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     zidx = pd.Index(zones, name=ZONE)
 
     gens, gupper = _build_generators(zdata, net, cfg)
+    if cfg.cap_renewables_to_plexos:
+        _override_renewable_upper_with_plexos(gens, gupper, zones, cfg)
     storage, sinflow = _build_storage(zdata, cfg)
 
     uc_gens = uc_candidates(gens) if cfg.enable_uc else []
@@ -364,7 +366,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     gen_p = m.add_variables(lower=gen_lower, upper=gen_upper, name="gen_p")
 
     if cfg.cap_renewables_to_plexos:
-        _cap_renewables_to_plexos(m, gens, gen_p, zones, hours, cfg)
+        _joint_renewable_constraints(m, gens, gen_p, zones, hours, cfg)
 
     A_gen = _incidence(gens["zone"], zones, GEN)
     gen_by_zone = (A_gen * gen_p).sum(GEN)
@@ -766,43 +768,86 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     return net_injection, obj
 
 
-def _cap_renewables_to_plexos(m: linopy.Model, gens: pd.DataFrame, gen_p, zones: list[str],
-                              hours: pd.Index, cfg: RunConfig) -> None:
-    """Cap every renewable generator's availability at PLEXOS's own realized
-    generation for that technology, instead of this model's own capacity x
-    capacity-factor profile -- see cfg.cap_renewables_to_plexos. Adds
-    constraints directly to ``m`` in place; nothing to return."""
-    from . import marginal_price_loader as mpl
+# Single-variable renewable techs: one of this model's own generators maps
+# 1:1 to one PLEXOS category, so its availability is fully REPLACED by
+# PLEXOS's realized generation (not just an upper bound layered on top of
+# this model's own capacity x profile calculation -- see
+# cfg.cap_renewables_to_plexos).
+_RENEWABLE_SINGLE = [
+    ("wind_onshore", "Wind (onshore) (MW)"),
+    ("wind_offshore", "Wind (offshore) (MW)"),
+    ("ror", "Hydro (river) (MW)"),
+]
+# Joint renewable techs: PLEXOS publishes only ONE aggregate category where
+# this model has several of its own generators (no PV/rooftop or
+# thermal/thermal+storage split in PLEXOS's output). Each present
+# generator's own upper bound is set to the full PLEXOS category total
+# (a generous, individually non-binding ceiling), and the real limit is
+# enforced afterwards as a joint sum(gen_p) <= PLEXOS constraint.
+_RENEWABLE_JOINT = [
+    ("solar_pv", ["Solar (MW)", "Solar (rooftop) (MW)"]),
+    ("solar_thermal", ["Solar (thermal) (MW)", "Solar (thermal_with_storage) (MW)"]),
+    ("other_res", ["Other RES (biomass) (MW)", "Other RES (geothermal) (MW)",
+                   "Other RES (marine) (MW)", "Other RES (waste) (MW)", "Other RES (unknown) (MW)"]),
+]
 
+
+def _renewable_plexos_dbs():
+    from . import marginal_price_loader as mpl
+    return {
+        "wind_onshore": mpl.DEFAULT_WIND_ONSHORE_DB, "wind_offshore": mpl.DEFAULT_WIND_OFFSHORE_DB,
+        "ror": mpl.DEFAULT_ROR_DB, "solar_pv": mpl.DEFAULT_SOLAR_PV_DB,
+        "solar_thermal": mpl.DEFAULT_SOLAR_THERMAL_DB, "other_res": mpl.DEFAULT_OTHER_RES_DB,
+    }
+
+
+def _override_renewable_upper_with_plexos(gens: pd.DataFrame, gupper: dict[str, np.ndarray],
+                                          zones: list[str], cfg: RunConfig) -> None:
+    """Replace every renewable generator's hourly availability (``gupper``,
+    mutated in place) with PLEXOS's own realized generation for that
+    technology, discarding this model's own capacity x capacity-factor
+    profile calculation entirely -- see cfg.cap_renewables_to_plexos. Must
+    run BEFORE gen_p's upper bound DataArray is built from ``gupper``.
+    """
+    from . import marginal_price_loader as mpl
+    dbs = _renewable_plexos_dbs()
     h0, h1 = cfg.hour_slice()
     ghours = pd.RangeIndex(h0, h1)
     gidx = set(gens.index)
 
-    def _plexos(db_path) -> pd.DataFrame:
-        return mpl.load_zone_series(zones, ghours, db_path)
-
-    for key, tech, db in [
-        ("wind_onshore", "Wind (onshore) (MW)", mpl.DEFAULT_WIND_ONSHORE_DB),
-        ("wind_offshore", "Wind (offshore) (MW)", mpl.DEFAULT_WIND_OFFSHORE_DB),
-        ("ror", "Hydro (river) (MW)", mpl.DEFAULT_ROR_DB),
-    ]:
-        px = _plexos(db)
+    for key, tech in _RENEWABLE_SINGLE:
+        px = mpl.load_zone_series(zones, ghours, dbs[key])
         for z in zones:
             gid = f"{z}|{tech}"
-            if gid not in gidx:
-                continue
-            cap_da = xr.DataArray(px[z].to_numpy(), coords={HOUR: hours}, dims=[HOUR])
-            m.add_constraints(gen_p.sel({GEN: gid}) <= cap_da, name=f"plexos_cap_{key}_{z}")
+            if gid in gidx:
+                gupper[gid] = px[z].to_numpy()
 
-    for key, techs, db in [
-        ("solar_pv", ["Solar (MW)", "Solar (rooftop) (MW)"], mpl.DEFAULT_SOLAR_PV_DB),
-        ("solar_thermal", ["Solar (thermal) (MW)", "Solar (thermal_with_storage) (MW)"],
-         mpl.DEFAULT_SOLAR_THERMAL_DB),
-        ("other_res", ["Other RES (biomass) (MW)", "Other RES (geothermal) (MW)",
-                       "Other RES (marine) (MW)", "Other RES (waste) (MW)", "Other RES (unknown) (MW)"],
-         mpl.DEFAULT_OTHER_RES_DB),
-    ]:
-        px = _plexos(db)
+    for key, techs in _RENEWABLE_JOINT:
+        px = mpl.load_zone_series(zones, ghours, dbs[key])
+        for z in zones:
+            for t in techs:
+                gid = f"{z}|{t}"
+                if gid in gidx:
+                    gupper[gid] = px[z].to_numpy()
+
+
+def _joint_renewable_constraints(m: linopy.Model, gens: pd.DataFrame, gen_p, zones: list[str],
+                                 hours: pd.Index, cfg: RunConfig) -> None:
+    """For renewable techs where PLEXOS publishes one aggregate category
+    covering several of this model's own generators (see
+    _RENEWABLE_JOINT), add the real limit: sum(gen_p over the group) <=
+    PLEXOS's realized total for that category. Each individual generator's
+    own upper bound was already set to the (generous) full category total
+    by _override_renewable_upper_with_plexos, so this is what actually
+    enforces the combined ceiling."""
+    from . import marginal_price_loader as mpl
+    dbs = _renewable_plexos_dbs()
+    h0, h1 = cfg.hour_slice()
+    ghours = pd.RangeIndex(h0, h1)
+    gidx = set(gens.index)
+
+    for key, techs in _RENEWABLE_JOINT:
+        px = mpl.load_zone_series(zones, ghours, dbs[key])
         for z in zones:
             present = [f"{z}|{t}" for t in techs if f"{z}|{t}" in gidx]
             if not present:
