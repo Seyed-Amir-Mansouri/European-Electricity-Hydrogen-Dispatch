@@ -100,14 +100,18 @@ class RunConfig:
     enable_uc: bool = False
     # Electricity-only, external-trade pricing: replace the fixed, unpriced
     # net external exchange (exports_loader) with per-neighbour controllable
-    # import/export legs, each capped at that leg's historical (PLEXOS-
-    # realized) flow and priced at the neighbour's OWN PLEXOS marginal price
-    # (0 if the neighbour has no PLEXOS price data, e.g. outside the modelled
-    # ENTSO-E area). Only affects the electricity balance; hydrogen external
-    # exchange is unaffected. Validated on DE00 alone first (correlation vs
-    # PLEXOS 0.86 -> 0.978, RMSE 18.27 -> 7.36 EUR/MWh excl. scarcity) before
-    # being generalised to every zone's own external borders. See
-    # model._priced_external_elec / exports_loader.elec_border_legs.
+    # import/export legs, each capped at that border's REAL physical line
+    # capacity (Networks.xlsx rating, both directions) and priced at the
+    # neighbour's OWN PLEXOS marginal price (0 if the neighbour has no
+    # PLEXOS price data, e.g. outside the modelled ENTSO-E area). Only
+    # affects the electricity balance; hydrogen external exchange is
+    # unaffected. Validated single-zone across all 21 CORE zones against two
+    # alternatives -- capping at historical (PLEXOS-realized) flow (mean
+    # corr 0.754) and leaving trade fully uncapped (mean corr 0.909) -- real
+    # line capacity scored highest (mean corr 0.958) and is the physically
+    # correct choice: a real joint solve is limited by actual transmission
+    # capacity, not by whatever volume PLEXOS's own solve happened to use.
+    # See model._priced_external_elec / exports_loader.elec_border_legs.
     priced_external_elec: bool = False
     # Fix each zone's electrolyser electricity consumption to PLEXOS's own
     # historical "Electrolyser (load) [MW]" profile instead of letting the LP

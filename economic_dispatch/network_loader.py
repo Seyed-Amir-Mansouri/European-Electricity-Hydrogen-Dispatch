@@ -162,3 +162,14 @@ def load_networks(zones: list[str], db_path: Path = DEFAULT_NETWORKS_DB) -> Netw
     prices = df[df["carrier"] == "prices"].set_index("frm")["cap_from_to_mw"].to_dict()
     return NetworkData(lines_for("electricity"), lines_for("hydrogen"),
                        float(prices.get(_CO2, 0.0)))
+
+
+def border_line_caps(carrier: str = "electricity", db_path: Path = DEFAULT_NETWORKS_DB) -> dict[tuple, tuple]:
+    """{(frm, to): (cap_from_to_mw, cap_to_from_mw)} for every line of the
+    given carrier, any pair -- unlike ``load_networks``, not filtered to a
+    zone selection. Used to cap priced external-trade legs (model.py's
+    ``priced_external_elec``) at each border's real physical line rating."""
+    df = pd.read_parquet(db_path)
+    sub = df[df["carrier"] == carrier]
+    return {(frm, to): (float(ft), float(tf)) for frm, to, ft, tf in
+            zip(sub["frm"], sub["to"], sub["cap_from_to_mw"], sub["cap_to_from_mw"])}
