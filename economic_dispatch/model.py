@@ -728,17 +728,45 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     pidx = pd.Index([f"{z}|{n}" for z, n in pairs], name=pname)
 
     line_caps = nl.border_line_caps("electricity", cfg.networks_db)
+    hub_candidates = {a for a, _ in line_caps} | {b for _, b in line_caps}
+
+    def _directed_cap(frm: str, to: str) -> float:
+        """Capacity FROM frm TO to for a direct line record, whichever
+        orientation it was stored in -- 0 if no such line exists."""
+        if (frm, to) in line_caps:
+            return line_caps[(frm, to)][0]
+        if (to, frm) in line_caps:
+            return line_caps[(to, frm)][1]
+        return 0.0
+
+    def _hub_routed_cap(frm: str, to: str) -> float:
+        """Best single-hub 2-hop capacity FROM frm TO to (frm->H->to),
+        bottlenecked at the tighter of the two hops, when no direct line
+        exists -- e.g. PL00 has no direct line to CZ00/DE00/SK00 in
+        Networks.xlsx, but real trade (per the crossborder-flow historical
+        data) happens via the zero-capacity PL00I/PL00E interconnector hub
+        nodes (PL00<->PL00I<->CZ00/DE00/SK00, PL00<->PL00E<->CZ00/DE00/SK00).
+        0 if no route (direct or hub-routed) exists at all.
+        """
+        direct = _directed_cap(frm, to)
+        if direct > 0:
+            return direct
+        best = 0.0
+        for h in hub_candidates - {frm, to}:
+            leg1 = _directed_cap(frm, h)
+            if leg1 <= 0:
+                continue
+            leg2 = _directed_cap(h, to)
+            if leg2 <= 0:
+                continue
+            best = max(best, min(leg1, leg2))
+        return best
 
     def _border_cap(z: str, n: str) -> tuple[float, float]:
-        """(import cap z<-n, export cap z->n) MW, from whichever orientation
-        the line record was stored in -- 0 if no line exists at all."""
-        if (z, n) in line_caps:
-            ft, tf = line_caps[(z, n)]
-            return tf, ft
-        if (n, z) in line_caps:
-            ft, tf = line_caps[(n, z)]
-            return ft, tf
-        return 0.0, 0.0
+        """(import cap z<-n, export cap z->n) MW -- a direct line if one
+        exists, otherwise the best single-hub 2-hop route (see
+        _hub_routed_cap)."""
+        return _hub_routed_cap(n, z), _hub_routed_cap(z, n)
 
     imp_vec = np.array([_border_cap(z, n)[0] for z, n in pairs])
     exp_vec = np.array([_border_cap(z, n)[1] for z, n in pairs])
