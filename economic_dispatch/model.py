@@ -336,7 +336,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     gens, gupper = _build_generators(zdata, net, cfg)
     if cfg.cap_renewables_to_plexos:
-        _override_renewable_upper_with_plexos(gens, gupper, zones, cfg)
+        gens, gupper = _override_renewable_upper_with_plexos(zdata, gens, gupper, zones, cfg)
     storage, sinflow = _build_storage(zdata, cfg)
 
     uc_gens = uc_candidates(gens) if cfg.enable_uc else []
@@ -801,34 +801,69 @@ def _renewable_plexos_dbs():
     }
 
 
-def _override_renewable_upper_with_plexos(gens: pd.DataFrame, gupper: dict[str, np.ndarray],
-                                          zones: list[str], cfg: RunConfig) -> None:
-    """Replace every renewable generator's hourly availability (``gupper``,
-    mutated in place) with PLEXOS's own realized generation for that
-    technology, discarding this model's own capacity x capacity-factor
-    profile calculation entirely -- see cfg.cap_renewables_to_plexos. Must
-    run BEFORE gen_p's upper bound DataArray is built from ``gupper``.
+def _new_renewable_row(z: str, tech: str, category: str, pmax: float) -> dict:
+    """Minimal gens row for a renewable generator created purely from PLEXOS
+    data (see _override_renewable_upper_with_plexos) -- same column subset
+    _build_generators itself uses for CAT_VRES/CAT_ROR rows; every other
+    column (pmin_floor, ramp_up, ...) is implicitly NaN via pd.concat,
+    exactly as for a normally-built VRES/ROR row."""
+    return dict(gen=f"{z}|{tech}", zone=z, tech=tech, category=category,
+               h2_fuel=False, mc=0.0, eff=1.0, pmax=pmax)
+
+
+def _override_renewable_upper_with_plexos(zdata: dict[str, ZoneData], gens: pd.DataFrame,
+                                          gupper: dict[str, np.ndarray], zones: list[str],
+                                          cfg: RunConfig) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
+    """Replace every renewable generator's hourly availability with PLEXOS's
+    own realized generation for that technology, discarding this model's
+    own capacity x capacity-factor profile calculation entirely -- see
+    cfg.cap_renewables_to_plexos. Also CREATES a generator for any zone
+    that has real installed capacity for a technology but was skipped by
+    _build_generators because its own profile happened to be all-zero
+    (e.g. BEOF/DEKF's offshore wind: real capacity, empty profile data) --
+    a zone with genuinely zero capacity is left alone; nothing to source
+    generation from either way. Returns the (possibly extended) ``gens``
+    and ``gupper``; must run BEFORE gen_p's upper bound DataArray is built.
     """
     from . import marginal_price_loader as mpl
     dbs = _renewable_plexos_dbs()
     h0, h1 = cfg.hour_slice()
     ghours = pd.RangeIndex(h0, h1)
     gidx = set(gens.index)
+    new_rows: list[dict] = []
+
+    def _cap(z: str, tech: str) -> float:
+        return float(zdata[z].capacities.get(tech, 0.0) or 0.0)
 
     for key, tech in _RENEWABLE_SINGLE:
+        category = dl.CAT_ROR if key == "ror" else dl.CAT_VRES
         px = mpl.load_zone_series(zones, ghours, dbs[key])
         for z in zones:
             gid = f"{z}|{tech}"
+            vals = px[z].to_numpy()
             if gid in gidx:
-                gupper[gid] = px[z].to_numpy()
+                gupper[gid] = vals
+            elif _cap(z, tech) > 0:
+                new_rows.append(_new_renewable_row(z, tech, category, float(vals.max())))
+                gupper[gid] = vals
+                gidx.add(gid)
 
     for key, techs in _RENEWABLE_JOINT:
         px = mpl.load_zone_series(zones, ghours, dbs[key])
         for z in zones:
+            vals = px[z].to_numpy()
             for t in techs:
                 gid = f"{z}|{t}"
                 if gid in gidx:
-                    gupper[gid] = px[z].to_numpy()
+                    gupper[gid] = vals
+                elif _cap(z, t) > 0:
+                    new_rows.append(_new_renewable_row(z, t, dl.CAT_VRES, float(vals.max())))
+                    gupper[gid] = vals
+                    gidx.add(gid)
+
+    if new_rows:
+        gens = pd.concat([gens, pd.DataFrame(new_rows).set_index("gen")])
+    return gens, gupper
 
 
 def _joint_renewable_constraints(m: linopy.Model, gens: pd.DataFrame, gen_p, zones: list[str],
