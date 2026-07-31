@@ -237,6 +237,25 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
     H = len(zdata[cfg.zones[0]].profiles)
     zero = np.zeros(H)
 
+    # Fallback hourly inflow for natural-inflow hydro storage (reservoir,
+    # pondage, open-loop pumped -- NOT closed-loop, which has no natural
+    # inflow) sourced from PLEXOS's own realized generation for that kind,
+    # used only when the zone's own XLSX "...Flow Energy" profile is all-zero
+    # despite the zone having real storage capacity (a dead resource
+    # otherwise: with pchg=0 for these kinds, zero inflow under the cyclic
+    # end-of-horizon closure forces dis=0 for the whole horizon). See
+    # cfg.fill_missing_hydro_inflow_from_plexos.
+    plexos_inflow: dict[str, pd.DataFrame] = {}
+    if cfg.fill_missing_hydro_inflow_from_plexos:
+        from . import marginal_price_loader as mpl
+        h0, h1 = cfg.hour_slice()
+        ghours = pd.RangeIndex(h0, h1)
+        plexos_inflow = {
+            "Hydro reservoir": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_RESERVOIR_DB),
+            "Hydro pondage": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_PONDAGE_DB),
+            "Hydro open_ps": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_OPEN_PS_DB),
+        }
+
     for z in cfg.zones:
         zd = zdata[z]
         cap = zd.capacities
@@ -276,6 +295,8 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
         for kind, pdis, pchg, ecap, inf, eff, carrier in specs:
             if ecap <= 0 or pdis <= 0:
                 continue
+            if kind in plexos_inflow and not np.any(inf):
+                inf = np.clip(plexos_inflow[kind][z].to_numpy(), 0.0, None)
             sid = f"{z}|{kind}"
             rows.append(dict(sto=sid, zone=z, kind=kind, pdis=float(pdis),
                              pchg=float(pchg), ecap=float(ecap), eff=float(eff),

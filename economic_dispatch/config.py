@@ -160,6 +160,19 @@ class RunConfig:
     # See model._override_renewable_upper_with_plexos /
     # model._joint_renewable_constraints.
     cap_renewables_to_plexos: bool = False
+    # For hydro storage with real installed capacity but a "...Flow Energy"
+    # inflow profile that's all-zero in the zone's own XLSX (a dead resource
+    # otherwise -- with charge power 0 for these kinds, zero inflow under the
+    # cyclic end-of-horizon closure forces discharge=0 for the whole
+    # horizon), use PLEXOS's own realized generation for that hydro kind as
+    # the hourly inflow instead. Applies to reservoir, pondage, and
+    # open-loop pumped storage only -- NOT closed-loop pumped storage, which
+    # has no natural inflow at all (it only recirculates what it pumps).
+    # Found via FR15: "Reservoir Flow Energy" was 0 for all 8,736 hours
+    # despite 182 MW / 56,800 MWh installed reservoir capacity, which on its
+    # own explained all 190 hours of real shedding that zone showed relative
+    # to PLEXOS (which never sheds). See model._build_storage.
+    fill_missing_hydro_inflow_from_plexos: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

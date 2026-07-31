@@ -46,6 +46,17 @@ DEFAULT_ROR_DB = DEFAULT_EXPORTS_DIR / "ror_electricity_2030.parquet"
 DEFAULT_SOLAR_PV_DB = DEFAULT_EXPORTS_DIR / "solar_pv_electricity_2030.parquet"
 DEFAULT_SOLAR_THERMAL_DB = DEFAULT_EXPORTS_DIR / "solar_thermal_electricity_2030.parquet"
 DEFAULT_OTHER_RES_DB = DEFAULT_EXPORTS_DIR / "other_res_electricity_2030.parquet"
+# PLEXOS's own realized generation for the three natural-inflow hydro storage
+# kinds (reservoir, pondage, open-loop pumped -- NOT closed-loop, which has no
+# natural inflow at all, it only recirculates what it pumps). Used as a
+# fallback hourly inflow (model.cfg.fill_missing_hydro_inflow_from_plexos)
+# when a zone's own XLSX "...Flow Energy" profile is all-zero despite the
+# zone having real storage capacity for that kind -- same rationale as
+# cap_renewables_to_plexos, applied to storage inflow instead of VRES/ROR
+# availability.
+DEFAULT_HYDRO_RESERVOIR_DB = DEFAULT_EXPORTS_DIR / "hydro_reservoir_electricity_2030.parquet"
+DEFAULT_HYDRO_PONDAGE_DB = DEFAULT_EXPORTS_DIR / "hydro_pondage_electricity_2030.parquet"
+DEFAULT_HYDRO_OPEN_PS_DB = DEFAULT_EXPORTS_DIR / "hydro_open_ps_electricity_2030.parquet"
 
 # sheet name, row holding "Category", row holding "Country"/zone code, first data row
 _ELEC_SHEET = ("Hourly Market Data", 11, 12, 14)
@@ -103,15 +114,19 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
                             out_solar_pv: Path = DEFAULT_SOLAR_PV_DB,
                             out_solar_thermal: Path = DEFAULT_SOLAR_THERMAL_DB,
                             out_other_res: Path = DEFAULT_OTHER_RES_DB,
+                            out_hydro_reservoir: Path = DEFAULT_HYDRO_RESERVOIR_DB,
+                            out_hydro_pondage: Path = DEFAULT_HYDRO_PONDAGE_DB,
+                            out_hydro_open_ps: Path = DEFAULT_HYDRO_OPEN_PS_DB,
                             n_hours: int = HOURS_PER_YEAR) -> dict[str, Path]:
     """Extract every zone's/country's hourly marginal price (electricity +
-    hydrogen), Demand Side Response Implicit, Electrolyser (load), and every
+    hydrogen), Demand Side Response Implicit, Electrolyser (load), every
     renewable generation category (wind on/offshore, run-of-river, solar PV,
-    solar thermal, other renewables) from the PLEXOS reference workbook, and
-    write them as wide parquet databases. Slow-ish (a couple minutes: the
-    electricity sheet is ~4,200 columns wide, so the single pass over it
-    dominates) -- a one-time build step, not part of the model's runtime hot
-    path."""
+    solar thermal, other renewables), and every natural-inflow hydro storage
+    category (reservoir, pondage, open-loop pumped) from the PLEXOS reference
+    workbook, and write them as wide parquet databases. Slow-ish (a couple
+    minutes: the electricity sheet is ~4,200 columns wide, so the single pass
+    over it dominates) -- a one-time build step, not part of the model's
+    runtime hot path."""
     import openpyxl
     wb = openpyxl.load_workbook(ref_path, read_only=True, data_only=True)
     written = {}
@@ -128,12 +143,18 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
             "solar_pv": "Solar (Photovoltaic)",
             "solar_thermal": "Solar (Thermal)",
             "other_res": "Others renewable",
+            "hydro_reservoir": "Reservoir",
+            "hydro_pondage": "Pondage",
+            "hydro_open_ps": "Pump Storage - Open Loop (turbine)",
         }, n_hours)
         for key, out_path in [("price", out_elec), ("dsr_implicit", out_dsr_implicit),
                               ("electrolyser", out_electrolyser),
                               ("wind_onshore", out_wind_onshore), ("wind_offshore", out_wind_offshore),
                               ("ror", out_ror), ("solar_pv", out_solar_pv),
-                              ("solar_thermal", out_solar_thermal), ("other_res", out_other_res)]:
+                              ("solar_thermal", out_solar_thermal), ("other_res", out_other_res),
+                              ("hydro_reservoir", out_hydro_reservoir),
+                              ("hydro_pondage", out_hydro_pondage),
+                              ("hydro_open_ps", out_hydro_open_ps)]:
             df = elec[key]
             out_path.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(out_path, compression="zstd")
