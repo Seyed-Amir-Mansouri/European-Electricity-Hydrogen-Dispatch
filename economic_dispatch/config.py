@@ -15,9 +15,9 @@ from pathlib import Path
 # the workbooks present (see discover_zones), so adding/removing a zone file
 # "just works".
 ALL_ZONES = [
-    "AT00", "BE00", "BEOF", "CZ00", "DE00", "DEKF", "FR00", "HR00",
+    "AT00", "BE00", "BEOF", "CZ00", "DE00", "DEKF", "FR00", "FR15", "HR00",
     "HU00", "LUB1", "LUF1", "LUG1", "LUV1", "NL00", "NLLL", "PL00",
-    "PL00E", "PL00I", "RO00", "SI00", "SK00",
+    "RO00", "SI00", "SK00",
 ]
 
 # Repo layout: this file is Project 1/economic_dispatch/config.py
@@ -44,8 +44,11 @@ HOURS_PER_YEAR = 8736  # 364 days * 24
 # the PLEXOS MMStandardOutputFile, and any other non-zone workbook that may sit
 # in the data folder.
 _ZONE_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,3}$")
-# Zones excluded from the study (e.g. empty/degenerate nodes).
-_EXCLUDE_ZONES = {"FR15", "NL6H"}
+# Zones excluded from the study (e.g. empty/degenerate nodes). PL00E/PL00I
+# (zero-capacity, zero-demand interconnector hub placeholders for Poland's
+# CZ00/DE00/SK00 borders) were replaced by direct links in the updated
+# Networks.xlsx and are no longer modelled as separate zones.
+_EXCLUDE_ZONES = {"NL6H", "PL00E", "PL00I"}
 
 
 def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
