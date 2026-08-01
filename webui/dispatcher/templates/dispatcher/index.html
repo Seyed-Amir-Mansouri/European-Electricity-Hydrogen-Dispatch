@@ -1,0 +1,58 @@
+{% extends "dispatcher/base.html" %}
+{% block title %}CORE Dispatch — Select run{% endblock %}
+{% block content %}
+
+{% if errors %}
+  <div class="errors">
+    <strong>Fix before running:</strong>
+    <ul>
+      {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<form method="post" action="{% url 'dispatcher:run' %}">
+  {% csrf_token %}
+
+  <div class="panel">
+    <h2>Zones / countries</h2>
+    <div class="country-grid">
+      {% for country, zone_list in country_groups.items %}
+        <details class="country-group" open>
+          <summary>{{ country }}</summary>
+          {% for z in zone_list %}
+            <div class="zone-check">
+              <input type="checkbox" id="zone-{{ z }}" name="zones" value="{{ z }}"
+                     {% if z in selected_zones %}checked{% endif %}>
+              <label for="zone-{{ z }}">{{ z }}</label>
+            </div>
+          {% endfor %}
+        </details>
+      {% endfor %}
+    </div>
+    <p class="note">Picking any one zone of a country automatically includes its sibling zones too
+      (a country's hydrogen supply — SMR, electrolysers — is modelled as one shared system across
+      its zones, e.g. Germany's <code>DE00</code> + <code>DEKF</code>).</p>
+  </div>
+
+  <div class="panel">
+    <h2>Time range ({{ year }})</h2>
+    <div class="date-row">
+      <div class="field">
+        <label for="start_date">Start date</label>
+        <input type="date" id="start_date" name="start_date" min="{{ year }}-01-01" max="{{ year }}-12-31"
+               value="{{ start_date|default:'2030-01-01' }}" required>
+      </div>
+      <div class="field">
+        <label for="end_date">End date</label>
+        <input type="date" id="end_date" name="end_date" min="{{ year }}-01-01" max="{{ year }}-12-31"
+               value="{{ end_date|default:'2030-01-07' }}" required>
+      </div>
+    </div>
+    <p class="note">The dataset models a 364-day year (52 weeks); Dec 31 maps to the last modelled day.</p>
+  </div>
+
+  <button class="run" type="submit">Run dispatch</button>
+</form>
+
+{% endblock %}

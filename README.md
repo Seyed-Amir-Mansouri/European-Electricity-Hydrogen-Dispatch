@@ -23,7 +23,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Activating the environment puts `python`, `pip`, and `streamlit` on your PATH in
+Activating the environment puts `python` and `pip` on your PATH in
 that terminal, so the commands below work as written. To use them from **any**
 terminal without activating first, add the environment's `Scripts` folder to the
 Windows **PATH** environment variable (Settings → *Edit the system environment
@@ -45,18 +45,19 @@ straight away.
 
 ## Web UI
 
-An interactive [Streamlit](https://streamlit.io) app wraps the model — run it
-locally after installing the requirements:
+A [Django](https://www.djangoproject.com) app wraps the model — run it locally
+after installing the requirements:
 
 ```bash
-streamlit run app.py
+python webui/manage.py runserver
 ```
 
-It opens in your browser (`localhost:8501`). Choose the zones, horizon, and
-options in the sidebar, click **Run dispatch**, then explore the per-zone
-**generation stack**, the electricity & hydrogen **marginal-price** charts, and
-the **balance tables** (with CSV download). The app calls the same model code as
-the CLI.
+It opens in your browser (`localhost:8000`). Pick zones or whole countries
+(checking one zone of a country auto-includes its siblings), a 2030 date
+range, then click **Run dispatch**. The results page plots our electricity and
+hydrogen marginal prices against PLEXOS's own reference series and reports
+per-zone validation metrics (correlation, RMSE, mean difference, real shedding
+hours). The app calls the same model code as the CLI.
 
 ## Command line
 

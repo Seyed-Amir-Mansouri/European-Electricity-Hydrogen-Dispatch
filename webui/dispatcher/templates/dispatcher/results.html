@@ -1,0 +1,85 @@
+{% extends "dispatcher/base.html" %}
+{% block title %}CORE Dispatch — Results{% endblock %}
+{% block content %}
+
+<a class="back-link" href="{% url 'dispatcher:index' %}">&larr; New run</a>
+
+<div class="panel" style="margin-top:16px;">
+  <h2>Run</h2>
+  <p>
+    Zones: {% for z in zones %}<code>{{ z }}</code>{% if not forloop.last %} {% endif %}{% endfor %}
+    &middot; {{ start_date }} &rarr; {{ end_date }} (day {{ start_day }}&ndash;{{ end_day }} of {{ year }})
+  </p>
+  {% if auto_added %}
+    <p class="note">Auto-added (siblings of your selection, same country):
+      {% for z in auto_added %}<code>{{ z }}</code>{% if not forloop.last %} {% endif %}{% endfor %}
+    </p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Electricity price vs. PLEXOS</h2>
+  <img class="chart" src="data:image/png;base64,{{ plot_e }}" alt="Electricity price chart">
+</div>
+
+<div class="panel">
+  <h2>Hydrogen price vs. PLEXOS</h2>
+  <img class="chart" src="data:image/png;base64,{{ plot_h }}" alt="Hydrogen price chart">
+</div>
+
+<div class="panel">
+  <h2>Electricity metrics</h2>
+  <table class="metrics">
+    <thead><tr>
+      <th>Zone</th><th>corr (excl. scarcity)</th><th>RMSE</th><th>Mean diff</th>
+      <th>corr (all hrs)</th><th>Scarcity hrs (ours)</th><th>Scarcity hrs (PLEXOS)</th><th>Real shed hrs</th>
+    </tr></thead>
+    <tbody>
+      {% for r in zone_results %}
+        <tr>
+          <td class="zone-name">{{ r.zone }}</td>
+          {% with m=r.metrics_e %}
+            <td>{% if m.corr_excl != None %}{{ m.corr_excl|floatformat:4 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.rmse_excl != None %}{{ m.rmse_excl|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.mean_diff != None %}{{ m.mean_diff|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.corr_all != None %}{{ m.corr_all|floatformat:4 }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ m.n_hi_ours|default:"—" }}</td>
+            <td>{{ m.n_hi_plexos|default:"—" }}</td>
+            <td>{{ m.real_shed_hours }}</td>
+          {% endwith %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Hydrogen metrics</h2>
+  <table class="metrics">
+    <thead><tr>
+      <th>Zone</th><th>corr (excl. scarcity)</th><th>RMSE</th><th>Mean diff</th>
+      <th>corr (all hrs)</th><th>Scarcity hrs (ours)</th><th>Scarcity hrs (PLEXOS)</th><th>Real shed hrs</th>
+    </tr></thead>
+    <tbody>
+      {% for r in zone_results %}
+        <tr>
+          <td class="zone-name">{{ r.zone }}</td>
+          {% with m=r.metrics_h %}
+            <td>{% if m.corr_excl != None %}{{ m.corr_excl|floatformat:4 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.rmse_excl != None %}{{ m.rmse_excl|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.mean_diff != None %}{{ m.mean_diff|floatformat:2 }}{% else %}&mdash;{% endif %}</td>
+            <td>{% if m.corr_all != None %}{{ m.corr_all|floatformat:4 }}{% else %}&mdash;{% endif %}</td>
+            <td>{{ m.n_hi_ours|default:"—" }}</td>
+            <td>{{ m.n_hi_plexos|default:"—" }}</td>
+            <td>{{ m.real_shed_hours }}</td>
+          {% endwith %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">Hydrogen is modelled at country granularity: every zone of a country shares the same
+    PLEXOS reference price (<code>XX_H2</code>). "corr (excl. scarcity)" excludes hours where either
+    series is at/above 2,000 EUR/MWh.</p>
+</div>
+
+{% endblock %}

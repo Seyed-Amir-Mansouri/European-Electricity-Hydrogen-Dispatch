@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}CORE Dispatch{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171d2c; --border: #2a3348; --text: #e8ecf4;
+    --muted: #93a0bd; --accent: #4f8dfd; --accent-soft: #22314f;
+    --good: #34d399; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  header {
+    padding: 20px 32px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  header h1 { font-size: 20px; margin: 0; }
+  header span { color: var(--muted); font-size: 13px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 32px 60px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 24px; margin-bottom: 20px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .country-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px 18px;
+  }
+  .country-group { padding: 8px 0; }
+  .country-group summary {
+    font-weight: 600; cursor: pointer; color: var(--text); padding: 4px 0;
+  }
+  .zone-check { display: flex; align-items: center; gap: 8px; padding: 3px 0 3px 4px; }
+  .zone-check label { color: var(--muted); font-size: 13.5px; cursor: pointer; }
+  .zone-check input:checked + label { color: var(--text); }
+  .date-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 13px; color: var(--muted); }
+  input[type=date] {
+    background: #0c1119; border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-size: 14px;
+  }
+  button.run {
+    background: var(--accent); color: #fff; border: none; padding: 11px 26px;
+    border-radius: 8px; font-size: 14.5px; font-weight: 600; cursor: pointer;
+    margin-top: 18px;
+  }
+  button.run:hover { filter: brightness(1.08); }
+  .errors { background: #3a1d24; border: 1px solid #6b2b36; color: #ffb4bd;
+            padding: 12px 16px; border-radius: 8px; margin-bottom: 18px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  img.chart { width: 100%; border-radius: 8px; background: #fff; }
+  table.metrics { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.metrics th, table.metrics td {
+    padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border);
+  }
+  table.metrics th:first-child, table.metrics td:first-child { text-align: left; }
+  table.metrics th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .zone-name { font-weight: 600; }
+  .back-link { color: var(--accent); text-decoration: none; font-size: 13.5px; }
+  .back-link:hover { text-decoration: underline; }
+  code { background: var(--accent-soft); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CORE Electricity + Hydrogen Dispatch</h1>
+  <span>ENTSO-E TYNDP NT2030 &middot; linopy + HiGHS &middot; vs. PLEXOS</span>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

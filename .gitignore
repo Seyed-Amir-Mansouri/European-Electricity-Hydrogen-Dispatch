@@ -8,3 +8,4 @@ build_db.py
 CLAUDE.md
 .claude/
 .gitignore
+db.sqlite3
