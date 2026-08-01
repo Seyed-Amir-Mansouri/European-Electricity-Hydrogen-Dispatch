@@ -21,8 +21,6 @@ from economic_dispatch.config import (
 )
 from economic_dispatch import pipeline
 
-# Scarcity threshold (EUR/MWh) excluded from corr_excl/rmse_excl, matching
-# the filter used throughout this project's PLEXOS validation work.
 SCARCITY_THRESHOLD = 2000.0
 
 _COUNTRY_NAMES = {
@@ -116,8 +114,8 @@ def run_dispatch(request):
             zone=z,
             metrics_e=_metrics(ours_e, px_e, shed_e),
             metrics_h=_metrics(ours_h, px_h, shed_h),
-            plot_e=_plot_prices(hours, ours_e, px_e, f"{z} — Electricity price (EUR/MWh)"),
-            plot_h=_plot_prices(hours, ours_h, px_h, f"{z} — Hydrogen price (EUR/MWh)"),
+            plot_e=_plot_prices(hours, ours_e, px_e, f"{z} — Electricity price (EUR/MWh)", "EUR/MWh"),
+            plot_h=_plot_prices(hours, ours_h, px_h, f"{z} — Hydrogen price (EUR/MWhH2)", "EUR/MWhH2"),
         ))
 
     return render(request, "dispatcher/results.html", {
@@ -155,7 +153,8 @@ def _metrics(ours: np.ndarray, plexos: np.ndarray | None, shed: np.ndarray) -> d
     )
 
 
-def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None, title: str) -> str:
+def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None, title: str,
+                 yaxis_title: str = "EUR/MWh") -> str:
     """Interactive two-line Plotly chart: blue = ours, red = PLEXOS. Returns
     an HTML <div> fragment for direct embedding (plotly.js itself is loaded
     once via CDN in the base template, not repeated per chart)."""
@@ -166,7 +165,7 @@ def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None,
         fig.add_trace(go.Scatter(x=hours, y=plexos, mode="lines", name="PLEXOS",
                                  line=dict(color="#dc2626", width=1.5, dash="dot")))
     fig.update_layout(
-        title=title, xaxis_title="Hour of year", yaxis_title="EUR/MWh",
+        title=title, xaxis_title="Hour of year", yaxis_title=yaxis_title,
         template="plotly_white", height=320, autosize=True,
         margin=dict(l=55, r=20, t=45, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),

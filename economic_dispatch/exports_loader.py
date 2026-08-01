@@ -95,7 +95,7 @@ def _h2_edges(hdf: pd.DataFrame) -> list[tuple[str, str, np.ndarray]]:
     for f in flows:
         l, r = f.split("->")
         if l.startswith("IB") and l.endswith("_H2"):
-            continue  # drop aggregate hub->sink edges
+            continue
         arr = _num(hdf[f])
         if r.startswith("IB") and r.endswith("_H2"):
             for sink in hub_sinks.get(r, []):
@@ -133,17 +133,17 @@ def exogenous_h2_injection(selected: list[str], main_map: dict[str, str],
     out: dict[str, np.ndarray] = {}
     for l, r, arr in _h2_edges(hdf):
         if l.endswith("_H2") and r.endswith("_H2"):
-            continue  # a real cross-border edge -- handled elsewhere
+            continue
         real, virtual = (r, l) if r.endswith("_H2") else (l, r)
         if virtual.endswith("_H2"):
-            continue  # neither side is virtual (shouldn't happen); skip
+            continue
         C = _cc(real)
         if C not in sel_c:
             continue
         M = main_map.get(C)
         if M is None:
             continue
-        sign = 1.0 if real == r else -1.0  # + = flow INTO the real node
+        sign = 1.0 if real == r else -1.0
         out[M] = out.get(M, 0.0) + sign * arr
     return out
 
@@ -171,7 +171,6 @@ def h2_net_export(selected: list[str], main_map: dict[str, str],
         if M is not None:
             out[M] = out[M] + sign * arr
 
-    # SMR is domestic H2 supply -> a negative export at the main zone.
     smr_inj = smr_injection(selected, main_map, smr)
     for M, arr in smr_inj.items():
         out[M] = out[M] - arr
@@ -196,7 +195,7 @@ def h2_border_legs(selected: list[str], main_map: dict[str, str],
     out: dict[tuple[str, str], np.ndarray] = {}
     for l, r, arr in _h2_edges(hdf):
         if not (l.endswith("_H2") and r.endswith("_H2")):
-            continue  # virtual source, not a real cross-border line
+            continue
         xc, yc = _cc(l), _cc(r)
         if xc in sel_c and yc not in sel_c:
             C, N, sign = xc, yc, 1.0
@@ -206,11 +205,6 @@ def h2_border_legs(selected: list[str], main_map: dict[str, str],
             continue
         M = main_map.get(C)
         if M is None or M not in sel:
-            # C's real main H2 zone isn't part of THIS run's selection (e.g.
-            # testing BE00 alone when Belgium's main zone is BEOF) -- can't
-            # attribute this country's cross-border H2 trade to any zone in
-            # the model, so it's dropped (same as SMR silently no-op'ing via
-            # smr_injection's safe .get() lookup in that case).
             continue
         key = (M, N)
         out[key] = out.get(key, 0.0) + sign * arr
@@ -236,7 +230,7 @@ def load_external_injection(cfg, zones: list[str], hours: pd.Index,
     zidx = pd.Index(zones, name=ZONE)
 
     def to_injection(exp: dict[str, np.ndarray], n: int) -> xr.DataArray:
-        rows = [-exp.get(z, np.zeros(n))[h0:h1] for z in zones]  # injection = -export
+        rows = [-exp.get(z, np.zeros(n))[h0:h1] for z in zones]
         return xr.DataArray(np.vstack(rows), coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
 
     return to_injection(e_exp, len(edf)), to_injection(h_exp, len(hdf))

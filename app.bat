@@ -36,8 +36,22 @@ echo Applying Django migrations...
 echo Starting server on 0.0.0.0:8000 (reachable at http://100.121.87.117:8000 and http://127.0.0.1:8000) ...
 start "Django dev server" ".venv\Scripts\python.exe" webui\manage.py runserver 0.0.0.0:8000
 
-echo Waiting a few seconds for the server to come up, then opening it in your browser...
-ping 127.0.0.1 -n 4 >nul
+echo Waiting for the server to come up...
+set RETRIES=30
+:waitloop
+curl -s -o nul "http://127.0.0.1:8000/"
+if not errorlevel 1 goto :serverup
+set /a RETRIES-=1
+if %RETRIES% leq 0 (
+    echo Server did not respond in time; opening browser anyway.
+    goto :openbrowser
+)
+ping 127.0.0.1 -n 2 >nul
+goto :waitloop
+
+:serverup
+echo Server is up.
+:openbrowser
 start "" "http://127.0.0.1:8000/"
 
 endlocal

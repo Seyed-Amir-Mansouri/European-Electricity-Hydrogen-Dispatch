@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pandas as pd
 
-# --- Sheet names -----------------------------------------------------------
 S_CAP = "Technology Capacities"
 S_STO = "Storage Capacities"
 S_RES = "Reserve Requirements"
@@ -21,25 +20,23 @@ S_PROF = "Hourly Profiles"
 S_CHAR = "Technology Characteristics"
 S_GH = "Gas & Hydrogen Assets"
 
-# --- Technology categories -------------------------------------------------
-CAT_COMMIT = "committable"   # thermal fleet with integer unit commitment
-CAT_VRES = "vres"            # wind/solar: gen = capacity-factor profile x MW
-CAT_ROR = "ror"             # run-of-river hydro: gen <= inflow profile
-CAT_PROFILE = "profile_gen"  # Other RES / Other Non-RES / DSR: gen <= MW profile
-CAT_IGNORE = "ignore"       # handled elsewhere (storage, pumps) or unused
+CAT_COMMIT = "committable"
+CAT_VRES = "vres"
+CAT_ROR = "ror"
+CAT_PROFILE = "profile_gen"
+CAT_IGNORE = "ignore"
 
 
 @dataclass
 class ZoneData:
     code: str
-    capacities: dict[str, float]      # technology -> installed MW
-    storage_energy: dict[str, float]  # technology -> energy MWh
-    reserves: dict[str, float]        # requirement -> MW
-    h2_assets: dict[str, float]       # hydrogen terminal / storage -> MW
-    char: pd.DataFrame                # indexed by Technology
-    profiles: pd.DataFrame            # 24 rows (chosen day), profile columns
+    capacities: dict[str, float]
+    storage_energy: dict[str, float]
+    reserves: dict[str, float]
+    h2_assets: dict[str, float]
+    char: pd.DataFrame
+    profiles: pd.DataFrame
 
-    # -- convenient typed accessors on the characteristics table -----------
     def char_val(self, tech: str, col: str, default: float = 0.0) -> float:
         try:
             v = self.char.at[tech, col]
@@ -105,7 +102,6 @@ def _read_table_ws(ws, row_start: int | None = None, row_end: int | None = None)
     header = list(next(rows))
     ncol = len(header)
     data = []
-    # Data begins at sheet row 2 (1-based). Convert to 0-based data offsets.
     lo = 0 if row_start is None else row_start
     hi = None if row_end is None else row_end
     for i, r in enumerate(rows):
@@ -127,11 +123,10 @@ def load_zone(code: str, data_dir: Path, hour_start: int, hour_end: int) -> Zone
     capacities = _read_kv_ws(wb[S_CAP])
     storage_energy = _read_kv_ws(wb[S_STO])
     reserves = _read_kv_ws(wb[S_RES])
-    # Keep only the hydrogen assets — the gas system is out of scope.
     h2_assets = {k: v for k, v in _read_kv_ws(wb[S_GH]).items() if "(Gas)" not in k}
 
     char = _read_table_ws(wb[S_CHAR])
-    char = char.set_index(char.columns[0])  # index by Technology
+    char = char.set_index(char.columns[0])
 
     profiles = _read_table_ws(wb[S_PROF], hour_start, hour_end).reset_index(drop=True)
     profiles = profiles.drop(columns=[c for c in profiles.columns if c == "Gas Demand Profile"],
@@ -141,7 +136,6 @@ def load_zone(code: str, data_dir: Path, hour_start: int, hour_end: int) -> Zone
     return ZoneData(code, capacities, storage_energy, reserves, h2_assets, char, profiles)
 
 
-# --- Load from the consolidated parquet database ---------------------------
 def zones_in_db(db_path: Path) -> list[str]:
     """Sorted list of zone codes present in the zones parquet database."""
     df = pd.read_parquet(db_path, columns=["zone"])
@@ -157,7 +151,6 @@ def _zone_from_db(zdf: pd.DataFrame, code: str, h0: int, h1: int) -> ZoneData:
     c = zdf[zdf["section"] == "characteristics"].copy()
     ti = c["item"].str.split("||", n=1, expand=True, regex=False)
     c["tech"], c["attr"] = ti[0], ti[1]
-    # keep the string value where present (e.g. must-run lists), else the number
     c["value"] = c["value_str"].where(c["value_str"].notna(), c["value_num"])
     char = c.pivot(index="tech", columns="attr", values="value")
     char.index.name = "Technology"
@@ -179,7 +172,6 @@ def load_zones_from_db(codes: list[str], db_path: Path,
     if not db_path.exists():
         raise FileNotFoundError(
             f"Zone database not found: {db_path}. Build it with `python build_zones_db.py`.")
-    # Predicate pushdown: read only the requested zones' rows.
     db = pd.read_parquet(db_path, filters=[("zone", "in", list(codes))])
     present = set(db["zone"].unique())
     missing = [z for z in codes if z not in present]
@@ -189,7 +181,6 @@ def load_zones_from_db(codes: list[str], db_path: Path,
     return {z: _zone_from_db(by_zone[z], z, hour_start, hour_end) for z in codes}
 
 
-# --- Classification --------------------------------------------------------
 def classify(tech: str) -> tuple[str, bool]:
     """Map a Technology-Capacities row name to (category, is_h2_fuel).
 
@@ -201,27 +192,20 @@ def classify(tech: str) -> tuple[str, bool]:
     thermal fleet (fuel/CO2 cost divided by efficiency, must-run floor, ramp).
     """
     t = tech
-    # Conventional thermal fleet with exogenous fuel (Hydrogen ccgt/fc included:
-    # priced the same way, not drawing from the H2 balance -- see docstring).
     if (t.startswith("Nuclear") or t.startswith("Hard Coal") or t.startswith("Lignite")
             or t.startswith("Gas (") or t.startswith("Light Oil")
             or t.startswith("Heavy oil") or t.startswith("Oil shale")
             or t.startswith("Hydrogen (fc)") or t.startswith("Hydrogen (ccgt)")):
         return CAT_COMMIT, False
-    # Variable renewables (profile is a 0-1 capacity factor)
     if t.startswith("Wind (") or t.startswith("Solar ("):
         return CAT_VRES, False
-    # Run-of-river hydro
     if t.startswith("Hydro (river)"):
         return CAT_ROR, False
-    # Dispatchable-but-capped resources (profile already in MW)
     if t.startswith("Other RES") or t.startswith("Other Non-RES") or t.startswith("DSR"):
         return CAT_PROFILE, False
-    # Everything else (electrolyser, hydro storage/pumps, batteries) handled elsewhere
     return CAT_IGNORE, False
 
 
-# Capacity-tech -> hourly-profile column for variable RES (capacity-factor series).
 VRES_PROFILE = {
     "Wind (onshore) (MW)": "Wind_Onshore Profile",
     "Wind (offshore) (MW)": "Wind_Offshore Profile",

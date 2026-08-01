@@ -19,11 +19,6 @@ def solve_scenario(cfg: RunConfig) -> BuildResult:
     solve.solve(build)
     startup_cost_eur = 0.0
     if build.uc_gens:
-        # cfg.enable_uc: pass 1 above was a MILP (commitment binary
-        # for build.uc_gens), and HiGHS/linopy cannot return duals once any
-        # integer variable exists in the model, even after it's solved. Fix
-        # the solved 0/pmax commitment schedule in as data and rebuild as a
-        # pure LP (no binaries) to get real marginal prices.
         fixed_profile, startup_cost_eur = model.uc_fixed_profile_and_cost(build)
         build = model.build_model(zdata, net, cfg, fixed_uc_profile=fixed_profile)
         solve.solve(build)

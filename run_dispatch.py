@@ -40,7 +40,6 @@ def parse_args() -> RunConfig:
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
     a = p.parse_args()
 
-    # Resolve the day horizon: --start-day/--end-day take precedence over --day.
     if a.start_day is not None or a.end_day is not None:
         start = a.start_day if a.start_day is not None else a.end_day
         end = a.end_day if a.end_day is not None else a.start_day
@@ -52,7 +51,6 @@ def parse_args() -> RunConfig:
         p.error(f"invalid day range: start={start}, end={end}. Require 1 <= start <= end <= 364.")
 
     cfg = RunConfig(start_day=start, end_day=end)
-    # Zones come from the consolidated database (build it with build_zones_db.py).
     if not Path(cfg.zones_db).exists():
         p.error(f"zone database not found: {cfg.zones_db}. Run `python build_zones_db.py` first.")
     available = data_loader.zones_in_db(cfg.zones_db)
@@ -102,11 +100,6 @@ def run(cfg: RunConfig):
 
     startup_cost_eur = 0.0
     if build.uc_gens:
-        # cfg.enable_uc: that solve was a MILP (commitment binary
-        # for build.uc_gens), and HiGHS/linopy cannot return duals once any
-        # integer variable exists, even after solving. Fix the solved 0/pmax
-        # commitment schedule in as data and rebuild/re-solve as a pure LP
-        # (no binaries) to get real marginal prices.
         t = time.time()
         fixed_profile, startup_cost_eur = model.uc_fixed_profile_and_cost(build)
         build = model.build_model(zdata, net, cfg, fixed_uc_profile=fixed_profile)

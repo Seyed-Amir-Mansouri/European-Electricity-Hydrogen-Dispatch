@@ -121,22 +121,18 @@ def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     external_e = _zones_on_rows(build.external_e.to_pandas(), z).reindex(z)
     external_h2 = _zones_on_rows(build.external_h2.to_pandas(), z).reindex(z)
 
-    # H2 consumption by H2-fired plants
     h2 = build.gens[build.gens["h2_fuel"]]
     h2_cons = pd.DataFrame(0.0, index=z, columns=range(H))
     if not h2.empty and not sol["gen_p"].empty:
         for gid, row in h2.iterrows():
             h2_cons.loc[row["zone"]] += sol["gen_p"].loc[gid] / row["eff"]
 
-    # Network flows -> per-zone net import (recompute from solution)
     net_e = _net_import_from_solution(build, "e")
     net_h = _net_import_from_solution(build, "h")
 
-    # Electricity residual
     res_e = (gen_z + dis_z - ch_z - ely + net_e + external_e + shed_e - dump_e - demand_e)
     max_e = float(np.abs(res_e.to_numpy()).max()) if res_e.size else 0.0
 
-    # Hydrogen residual
     ely_prod = _ely_production(build, sol)
     res_h = (ely_prod + term + net_h + shed_h + external_h2 + dis_h2_z - ch_h2_z
              - dump_h - demand_h - h2_cons)
@@ -191,16 +187,10 @@ def summary(build: BuildResult) -> dict[str, float]:
     ely_total = sol["ely_p"].to_numpy().sum() if not sol["ely_p"].empty else 0.0
     term_total = sol["term_h2"].to_numpy().sum() if not sol["term_h2"].empty else 0.0
 
-    # Objective recomputed from the solution (avoids solver-API coupling).
     gen_cost = 0.0
     if not sol["gen_p"].empty:
         mc = build.gens["mc"].reindex(sol["gen_p"].index).fillna(0.0)
         gen_cost = float((sol["gen_p"].mul(mc, axis=0)).to_numpy().sum())
-    # cfg.enable_uc's start-up cost isn't recoverable from this (pass-2, all
-    # continuous) build at all -- pass 1's uc_start decision is what incurred
-    # it, and pass 2 has no such variable. pipeline.solve_scenario /
-    # run_dispatch.run compute it right after pass 1 and stash it on the
-    # final build as build.startup_cost_eur (0.0 when UC is off or unused).
     startup_cost = float(getattr(build, "startup_cost_eur", 0.0) or 0.0)
     obj = (gen_cost + cfg.h2_terminal_price * float(term_total)
            + cfg.voll_eur_per_mwh * float(shed_e + shed_h)
@@ -222,18 +212,12 @@ def summary(build: BuildResult) -> dict[str, float]:
 def write_outputs(build: BuildResult, out_dir: Path) -> None:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Clean slate: remove CSVs from any previous run so the folder reflects
-    # exactly this run (some files are only written when their variable is
-    # non-empty, so stale files would otherwise linger). Skip files locked by
-    # another process (e.g. open in Excel or mid-sync on Google Drive) rather
-    # than aborting the whole output step.
     for old in out_dir.glob("*.csv"):
         try:
             old.unlink()
         except OSError as e:
             print(f"  warning: could not remove {old.name} ({e.strerror}); "
                   f"close it if open in another program")
-    # The only outputs are the hourly per-technology balance CSVs (elec & H2).
     write_hourly_balance(build, out_dir)
 
 
@@ -302,10 +286,6 @@ def hourly_balance_tables(build: BuildResult) -> dict:
     dem_e, dem_h = da_rows(build.demand_e), da_rows(build.demand_h)
     ext_e, ext_h = da_rows(build.external_e), da_rows(build.external_h2)
     ely_prod = _ely_production(build, sol)
-    # Zonal marginal prices (balance duals), EUR/MWh, if computed. Blank the
-    # degenerate duals of empty nodes (no demand/gen/lines): they pin at the VOLL
-    # bound with no actual shedding, so a price >= VOLL where shed == 0 is not a
-    # real scarcity price and is set to NaN.
     voll = build.cfg.voll_eur_per_mwh
     price_e = price_h = None
     if getattr(build, "price_e", None) is not None:
@@ -315,7 +295,6 @@ def hourly_balance_tables(build: BuildResult) -> dict:
         price_h = da_rows(build.price_h).mask(
             (da_rows(build.price_h).abs() >= 0.99 * voll) & (shed_h.abs() <= 1e-6))
 
-    # H2 consumed by H2-fired plants, per zone
     h2 = build.gens[build.gens["h2_fuel"]]
     h2_cons = pd.DataFrame(0.0, index=z, columns=range(H))
     if not h2.empty and not gp.empty:
@@ -332,7 +311,6 @@ def hourly_balance_tables(build: BuildResult) -> dict:
         df.columns = pd.MultiIndex.from_tuples(df.columns, names=["zone", "category"])
         return df.round(3)
 
-    # ---- electricity ----
     def elec_cols(zone):
         out = []
         if not gp.empty:
@@ -352,7 +330,6 @@ def hourly_balance_tables(build: BuildResult) -> dict:
             out.append(("Marginal Price (EUR/MWh)", price_e.loc[zone]))
         return out
 
-    # ---- hydrogen ----
     def h2_cols(zone):
         out = [
             ("Electrolyser production", ely_prod.loc[zone]),
@@ -395,14 +372,11 @@ def write_inputs(build: BuildResult, out_dir: Path) -> None:
     H = len(build.hours)
     g = build.gens
 
-    # Per-generator resolved parameters
     g.reset_index().to_csv(out_dir / "nodes_generators.csv", index=False)
 
-    # Storage devices
     if not build.storage.empty:
         build.storage.reset_index().to_csv(out_dir / "nodes_storage.csv", index=False)
 
-    # Network lines actually used
     line_rows = []
     for carrier, lines in [("electricity", build.elines), ("hydrogen", build.hlines)]:
         for l in lines:
@@ -411,7 +385,6 @@ def write_inputs(build: BuildResult, out_dir: Path) -> None:
                                   loss_fraction=l.loss))
     pd.DataFrame(line_rows).to_csv(out_dir / "network_lines.csv", index=False)
 
-    # Per-node summary
     def cap_by(cat):
         return g[g["category"] == cat].groupby("zone")["pmax"].sum().reindex(z).fillna(0.0)
 

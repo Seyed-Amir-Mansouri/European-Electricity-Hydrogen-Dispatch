@@ -25,7 +25,6 @@ SHEET_H2 = "Hydrogen Pipelines"
 SHEET_DATA = "Data"
 _CARRIERS = [("electricity", SHEET_ELEC), ("hydrogen", SHEET_H2)]
 _CO2 = "CO2 Price (EUR/ton)"
-# Reference-grid interconnector-hub codes -> the country they represent.
 _H2_HUB_COUNTRY = {"IBIT": "IT", "IBFI": "FI"}
 
 
@@ -33,21 +32,18 @@ _H2_HUB_COUNTRY = {"IBIT": "IT", "IBFI": "FI"}
 class Line:
     frm: str
     to: str
-    cap_ft: float   # MW capacity in the from->to direction
-    cap_tf: float   # MW capacity in the to->from direction
-    loss: float     # fractional loss on the line (0-1)
+    cap_ft: float
+    cap_tf: float
+    loss: float
 
 
 @dataclass
 class NetworkData:
     elec: list[Line]
     hydrogen: list[Line]
-    co2_price: float      # EUR/ton
+    co2_price: float
 
 
-# --------------------------------------------------------------------------- #
-# Build:  Networks.xlsx  ->  networks_2030.parquet
-# --------------------------------------------------------------------------- #
 def _loss_lookup(ws) -> dict[frozenset, float]:
     """Build {frozenset({From, To}) -> loss fraction} from the left block."""
     out: dict[frozenset, float] = {}
@@ -121,7 +117,7 @@ def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NET
     for carrier, sheet in _CARRIERS:
         for frm, to, ft, tf, loss in _read_lines_all(wb[sheet]):
             if carrier == "hydrogen" and (frm[:2], to[:2]) in ref:
-                ft = ref[(frm[:2], to[:2])] * 1000.0            # GW -> MW
+                ft = ref[(frm[:2], to[:2])] * 1000.0
                 tf = ref.get((to[:2], frm[:2]), 0.0) * 1000.0
                 overridden += 1
             rows.append(dict(carrier=carrier, frm=frm, to=to,
@@ -139,9 +135,6 @@ def build_networks_db(data_dir: Path = DEFAULT_DATA_DIR, out: Path = DEFAULT_NET
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Load:  networks_2030.parquet  ->  NetworkData (filtered to selected zones)
-# --------------------------------------------------------------------------- #
 def load_networks(zones: list[str], db_path: Path = DEFAULT_NETWORKS_DB) -> NetworkData:
     db_path = Path(db_path)
     if not db_path.exists():
@@ -155,7 +148,7 @@ def load_networks(zones: list[str], db_path: Path = DEFAULT_NETWORKS_DB) -> Netw
         out: list[Line] = []
         for frm, to, ft, tf, loss in zip(sub["frm"], sub["to"], sub["cap_from_to_mw"],
                                           sub["cap_to_from_mw"], sub["loss_fraction"]):
-            if frm in zset and to in zset and frm != to:  # internal lines only
+            if frm in zset and to in zset and frm != to:
                 out.append(Line(frm, to, float(ft), float(tf), float(loss)))
         return out
 

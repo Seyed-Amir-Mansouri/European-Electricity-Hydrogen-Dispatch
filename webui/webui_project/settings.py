@@ -13,28 +13,15 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import sys
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-# Repo root ("Project 1/"), one level above webui/ -- so `economic_dispatch`
-# (the dispatch model package, a sibling of this Django project) is importable.
 REPO_ROOT = BASE_DIR.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-# Local single-user research tool, never deployed -- fine as a fixed dev key.
 SECRET_KEY = 'django-insecure-dh__ydv2(k6k1p$74zz7q+nf00)_(oq98l&!arf@84nmw0!95s'
 
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '100.121.87.117']
-
-
-# Application definition
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -75,20 +62,12 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'webui_project.wsgi.application'
 
-
-# Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-
-
-# Password validation
-# https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -105,10 +84,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
-# Internationalization
-# https://docs.djangoproject.com/en/6.0/topics/i18n/
-
 LANGUAGE_CODE = 'en-us'
 
 TIME_ZONE = 'UTC'
@@ -116,9 +91,5 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 
 USE_TZ = True
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'

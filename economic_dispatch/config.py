@@ -11,17 +11,12 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-# The 23 zone codes shipped in XLSXs/. Used only as a fallback when the data
-# folder can't be scanned; the actual zone set is normally auto-discovered from
-# the workbooks present (see discover_zones), so adding/removing a zone file
-# "just works".
 ALL_ZONES = [
     "AT00", "BE00", "BEOF", "CZ00", "DE00", "DEKF", "FR00", "FR15", "HR00",
     "HU00", "LUB1", "LUF1", "LUG1", "LUV1", "NL00", "NLLL", "PL00",
     "RO00", "SI00", "SK00",
 ]
 
-# Repo layout: this file is Project 1/economic_dispatch/config.py
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "XLSXs"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs"
@@ -29,26 +24,15 @@ DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "inputs"
 DEFAULT_ZONES_DB = DEFAULT_EXPORTS_DIR / "zones_2030.parquet"
 DEFAULT_NETWORKS_DB = DEFAULT_EXPORTS_DIR / "networks_2030.parquet"
 DEFAULT_H2_REF = DEFAULT_EXPORTS_DIR / "ReferenceGrid_Hydrogen.xlsx"
-# PLEXOS reference output (source of truth for marginal prices outside this
-# model's own solve -- e.g. pricing cross-border trade against each
-# neighbour's own realized marginal cost; see marginal_price_loader.py).
 DEFAULT_PLEXOS_REF = DEFAULT_DATA_DIR / "MMStandardOutputFile_NT2030_Plexos_CY2009_2.5_v40.xlsx"
 DEFAULT_MARGINAL_PRICE_ELEC_DB = DEFAULT_EXPORTS_DIR / "marginal_price_electricity_2030.parquet"
 DEFAULT_MARGINAL_PRICE_H2_DB = DEFAULT_EXPORTS_DIR / "marginal_price_hydrogen_2030.parquet"
 
 HOURS_PER_DAY = 24
-HOURS_PER_YEAR = 8736  # 364 days * 24
+HOURS_PER_YEAR = 8736
 
 
-# A zone code is a 2-letter country prefix + 2-3 alphanumeric subzone id
-# (e.g. AT00, BEOF, DE00, NL6H, PL00E). This deliberately excludes Networks.xlsx,
-# the PLEXOS MMStandardOutputFile, and any other non-zone workbook that may sit
-# in the data folder.
 _ZONE_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,3}$")
-# Zones excluded from the study (e.g. empty/degenerate nodes). PL00E/PL00I
-# (zero-capacity, zero-demand interconnector hub placeholders for Poland's
-# CZ00/DE00/SK00 borders) were replaced by direct links in the updated
-# Networks.xlsx and are no longer modelled as separate zones.
 _EXCLUDE_ZONES = {"NL6H", "PL00E", "PL00I"}
 
 
@@ -74,17 +58,6 @@ def discover_zones_from_xlsx(data_dir=DEFAULT_DATA_DIR) -> list[str]:
 
 @lru_cache(maxsize=8)
 def discover_zones(zones_db=DEFAULT_ZONES_DB, data_dir=DEFAULT_DATA_DIR) -> list[str]:
-    """Zone codes known to this dataset -- read from ``zones_db`` (the
-    already-built ``zones_2030.parquet``) so normal runtime use (RunConfig's
-    country auto-expansion, the web UI's zone list) never needs the raw
-    XLSXs/ folder at all. Falls back to scanning ``data_dir`` for ``*.xlsx``
-    only if the database doesn't exist yet (e.g. before the first
-    ``build_db.py`` run). Cached (per zones_db/data_dir pair, which are
-    almost always the defaults): this file lives on a Google-Drive-synced
-    path where the first-ever read can take tens of seconds, and the zone
-    set never changes during a process's lifetime -- e.g. the web UI would
-    otherwise re-read it on every single page load.
-    """
     zones_db = Path(zones_db)
     if zones_db.exists():
         import pandas as pd
@@ -93,20 +66,6 @@ def discover_zones(zones_db=DEFAULT_ZONES_DB, data_dir=DEFAULT_DATA_DIR) -> list
 
 
 def _expand_to_countries(zones: list[str], zones_db) -> list[str]:
-    """Expand a zone list to include every sibling zone of the same country
-    (2-letter prefix) known to ``zones_db``.
-
-    PLEXOS's hydrogen side is modelled at COUNTRY granularity: all of a
-    country's H2 demand/SMR/electrolyser economy is attributed to a single
-    "main H2 zone" (see model._h2_main_zones), reached from any sibling zone
-    by an effectively unlimited intra-country pipeline already present in
-    Networks.xlsx (e.g. DE00<->DEKF at 200,000 MW). Selecting only DE00 would
-    silently drop DEKF's own electrolyser (if any) and its electricity
-    network -- a country can have more than one electrolyser across its
-    zones, and excluding a sibling zone entirely (rather than just letting
-    it carry none of the H2 balance) loses real capacity, not just an
-    H2-side technicality.
-    """
     all_zones = discover_zones(zones_db)
     countries = {z[:2] for z in zones}
     return sorted(set(zones) | {z for z in all_zones if z[:2] in countries})
@@ -114,114 +73,46 @@ def _expand_to_countries(zones: list[str], zones_db) -> list[str]:
 
 @dataclass
 class RunConfig:
-    # --- Scope -------------------------------------------------------------
     zones: list[str] = field(default_factory=lambda: list(ALL_ZONES))
-    start_day: int = 1                 # 1-based first day of the horizon
-    end_day: int = 1                   # 1-based last day (inclusive); == start_day for one day
+    start_day: int = 1
+    end_day: int = 1
     data_dir: Path = DEFAULT_DATA_DIR
     output_dir: Path = DEFAULT_OUTPUT_DIR
-    exports_dir: Path = DEFAULT_EXPORTS_DIR   # inputs/ result databases (parquet)
-    zones_db: Path = DEFAULT_ZONES_DB         # consolidated zone data (parquet)
-    networks_db: Path = DEFAULT_NETWORKS_DB   # line topology + prices (parquet)
-    out_tag: str | None = None         # write to outputs/<out_tag>/ to keep runs side by side
+    exports_dir: Path = DEFAULT_EXPORTS_DIR
+    zones_db: Path = DEFAULT_ZONES_DB
+    networks_db: Path = DEFAULT_NETWORKS_DB
+    out_tag: str | None = None
 
-    # --- Feature flags -----------------------------------------------------
-    enable_storage: bool = True        # battery + hydro reservoir/pumped storage
-    enable_ramps: bool = True          # generator ramp-rate limits
-    enable_reserves: bool = False      # FCR/FRR headroom constraints (off by default)
-    enable_h2_terminal: bool = True    # allow external H2 supply at import terminals
-    enable_h2_storage: bool = True     # model H2 storage (Injection/Withdraw Hydrogen power)
-    cyclic_storage: bool = True        # end-of-horizon SoC >= initial SoC (full storage cycle)
-    # Unit commitment (off by default -- the ONE place this project uses
-    # integer variables; see model.build_model's fixed_uc_profile /
-    # pipeline.solve_scenario's two-pass solve). Currently covers min
-    # up/down time (+ minimum stable level while committed); more UC-related
-    # constraints (e.g. start-up cost) are meant to layer onto this same flag
-    # over time. Only applies to committable fleets with pmin_floor == 0
-    # (must-run fleets are already permanently on) AND Min Time On/Off > 1h (a
-    # 1h minimum is a no-op at hourly resolution) -- for DE00 that's just
-    # Gas (conv_old1) and Gas (ccgt_old1). Verified to change only those two
-    # fleets' own dispatch pattern (single-hour "blips" -> real
-    # >=MinTime-long committed runs); system-wide price/shed are unaffected
-    # at this scale. See Formulation.md Sec 9a.
+    enable_storage: bool = True
+    enable_ramps: bool = True
+    enable_reserves: bool = False
+    enable_h2_terminal: bool = True
+    enable_h2_storage: bool = True
+    cyclic_storage: bool = True
     enable_uc: bool = False
-    # Subtract PLEXOS's own "Demand Side Response Implicit [MW]" from the
-    # electricity demand target, matching how PLEXOS itself defines net
-    # demand (this is a signed correction -- activation reduces net demand,
-    # deactivation raises it -- not a one-directional relief term). Needed
-    # for a fair price-tracking comparison against PLEXOS: without it,
-    # DE00's full-year correlation vs PLEXOS regressed from 0.978 to 0.88
-    # even after fixing a priced-external-trade sign bug; with both fixes
-    # together it's back to 0.978. See marginal_price_loader.DEFAULT_DSR_IMPLICIT_DB.
     subtract_dsr_implicit: bool = False
-    # Skip the hydrogen side of the model entirely (no H2 balance, H2
-    # storage, H2 terminal imports, or H2 network flows) -- for
-    # electricity-only price-tracking validation runs. Hydrogen-fired
-    # plants (h2_fuel=True) still dispatch normally (their cost is just VOM,
-    # independent of any H2 balance either way); the electrolyser's
-    # electricity consumption still subtracts from the elec balance as
-    # usual. Cuts LP size substantially at multi-zone scale.
     electricity_only: bool = False
 
-    # --- Economics (ASSUMPTIONS) ------------------------------------------
-    # Marginal cost = VOM Price + fuel_term + co2_term, where
-    #   fuel_term = Fuel / eff  if fuel_per_thermal else Fuel
-    #   co2_term  = (CO2Factor / eff if co2_per_thermal else CO2Factor) * CO2Price
-    # The Fuel and CO2Factor columns are both per MWh_thermal (fuel input, NCV
-    # basis) -- e.g. every Gas sub-fleet shares the same ~22.6 EUR/MWh fuel
-    # price and 0.1857 t/MWh CO2 factor regardless of efficiency, confirmed
-    # against the ENTSO-E "Common Data" reference (Fuel & CO2 price inputs are
-    # commodity-basis, not per-MWh_elec) -- so both must be divided by
-    # efficiency, or fleets of very different efficiency end up with the same
-    # marginal cost and the LP can't tell an OCGT from a CCGT. Validated against
-    # PLEXOS: with co2_per_thermal=False the model's price sat ~9.50 EUR/MWh
-    # below PLEXOS on average (non-scarcity hours); flipping it to True (this
-    # default) cuts that to +1.67 EUR/MWh -- Gas (ccgt_pre2), the largest and
-    # cheapest flexible fleet (sets price ~30% of hours), was understated by
-    # 15.25 EUR/MWh without this term. See Formulation.md Sec 8.
     fuel_per_thermal: bool = True
     co2_per_thermal: bool = True
-    default_efficiency: float = 0.5    # fallback when Efficiency is 0/missing
-    voll_eur_per_mwh: float = 3_000.0  # value of lost load (elec & H2 shedding penalty),
-                                        # matching PLEXOS's own scarcity price for DE00
-    h2_terminal_price: float = 150.0   # EUR/MWh cost of terminal H2 imports (ASSUMPTION)
-    dump_penalty_eur_per_mwh: float = 0.0  # penalty for dumping/curtailing excess supply
-    # Small per-MWh cost on storage throughput (charge + discharge), to forbid
-    # simultaneous charge/discharge without a binary. Not needed for lossy
-    # devices (efficiency < 1, e.g. batteries): there charging+discharging at
-    # once already wastes energy. It matters for lossless devices (efficiency =
-    # 1, e.g. hydro reservoir/pumped-storage and H2 storage), where without it
-    # the LP could do both at once. Keep tiny so it doesn't distort economics.
+    default_efficiency: float = 0.5
+    voll_eur_per_mwh: float = 3_000.0
+    h2_terminal_price: float = 150.0
+    dump_penalty_eur_per_mwh: float = 0.0
     storage_op_cost_eur_per_mwh: float = 0.01
 
-    # --- Physics defaults --------------------------------------------------
-    initial_soc_fraction: float = 0.5  # storage state of charge at hour 0
-    ramp_scale: float = 1.0            # multiplier on ramp-rate column
-    default_pump_efficiency: float = 0.8   # round-trip eff for open-loop pumped hydro
-    # closed_ps gets its own figure rather than sharing default_pump_efficiency:
-    # replaying PLEXOS's own hourly turbine/pump MW for DE00 through this
-    # model's SoC recursion, sum(discharge)/sum(charge) is 0.8015 for open_ps
-    # (matches the 0.8 default almost exactly) but 0.7500 for closed_ps -- at
-    # 0.75 closed_ps's SoC trajectory fits its declared energy capacity almost
-    # exactly (touches both 0 and the cap over the year); at 0.8 it would still
-    # balance, just with slack to spare. See Formulation.md Sec 14.5.
-    default_closed_ps_efficiency: float = 0.75  # round-trip eff for closed-loop pumped hydro
-    # H2 storage energy capacity (MWh) = Withdraw (Hydrogen) power x h2_storage_hours.
-    # ASSUMPTION: the data gives only injection/withdrawal power, no energy capacity.
+    initial_soc_fraction: float = 0.5
+    ramp_scale: float = 1.0
+    default_pump_efficiency: float = 0.8
+    default_closed_ps_efficiency: float = 0.75
     h2_storage_hours: float = 168.0
-    h2_storage_efficiency: float = 1.0     # H2 storage round-trip efficiency (ASSUMPTION)
-    default_hydro_efficiency: float = 1.0  # reservoir/pondage (water, no conversion loss)
+    h2_storage_efficiency: float = 1.0
+    default_hydro_efficiency: float = 1.0
 
-    # --- Solver ------------------------------------------------------------
     solver_name: str = "highs"
     mip_rel_gap: float = 1e-4
 
     def __post_init__(self) -> None:
-        # Auto-expand to every sibling zone of the same country (see
-        # _expand_to_countries) -- a country's H2 economy (and, for the
-        # electricity side, its own internal network) can span multiple
-        # zones, so picking just one would silently drop the others'
-        # electrolysers/capacity rather than modelling them at zero.
         self.zones = _expand_to_countries(self.zones, self.zones_db)
 
     def resolved_output_dir(self) -> Path:
