@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 # The 23 zone codes shipped in XLSXs/. Used only as a fallback when the data
@@ -51,12 +52,15 @@ _ZONE_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{2,3}$")
 _EXCLUDE_ZONES = {"NL6H", "PL00E", "PL00I"}
 
 
-def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
+def discover_zones_from_xlsx(data_dir=DEFAULT_DATA_DIR) -> list[str]:
     """Zone codes = every ``*.xlsx`` in ``data_dir`` whose name matches a zone code.
 
     Returns them sorted for reproducibility. Excel lock files (``~$*``),
     ``Networks.xlsx``, non-zone workbooks, and ``_EXCLUDE_ZONES`` are skipped.
-    Empty list if the folder can't be read.
+    Empty list if the folder can't be read. Only used by build_db.py to
+    build zones_2030.parquet in the first place -- discover_zones() below
+    reads that database directly at runtime, so normal use never needs the
+    raw XLSXs/ folder at all.
     """
     data_dir = Path(data_dir)
     if not data_dir.is_dir():
@@ -68,9 +72,29 @@ def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
     )
 
 
-def _expand_to_countries(zones: list[str], data_dir) -> list[str]:
+@lru_cache(maxsize=8)
+def discover_zones(zones_db=DEFAULT_ZONES_DB, data_dir=DEFAULT_DATA_DIR) -> list[str]:
+    """Zone codes known to this dataset -- read from ``zones_db`` (the
+    already-built ``zones_2030.parquet``) so normal runtime use (RunConfig's
+    country auto-expansion, the web UI's zone list) never needs the raw
+    XLSXs/ folder at all. Falls back to scanning ``data_dir`` for ``*.xlsx``
+    only if the database doesn't exist yet (e.g. before the first
+    ``build_db.py`` run). Cached (per zones_db/data_dir pair, which are
+    almost always the defaults): this file lives on a Google-Drive-synced
+    path where the first-ever read can take tens of seconds, and the zone
+    set never changes during a process's lifetime -- e.g. the web UI would
+    otherwise re-read it on every single page load.
+    """
+    zones_db = Path(zones_db)
+    if zones_db.exists():
+        import pandas as pd
+        return sorted(pd.read_parquet(zones_db, columns=["zone"])["zone"].unique().tolist())
+    return discover_zones_from_xlsx(data_dir)
+
+
+def _expand_to_countries(zones: list[str], zones_db) -> list[str]:
     """Expand a zone list to include every sibling zone of the same country
-    (2-letter prefix) present in ``data_dir``.
+    (2-letter prefix) known to ``zones_db``.
 
     PLEXOS's hydrogen side is modelled at COUNTRY granularity: all of a
     country's H2 demand/SMR/electrolyser economy is attributed to a single
@@ -83,7 +107,7 @@ def _expand_to_countries(zones: list[str], data_dir) -> list[str]:
     it carry none of the H2 balance) loses real capacity, not just an
     H2-side technicality.
     """
-    all_zones = discover_zones(data_dir)
+    all_zones = discover_zones(zones_db)
     countries = {z[:2] for z in zones}
     return sorted(set(zones) | {z for z in all_zones if z[:2] in countries})
 
@@ -198,7 +222,7 @@ class RunConfig:
         # electricity side, its own internal network) can span multiple
         # zones, so picking just one would silently drop the others'
         # electrolysers/capacity rather than modelling them at zero.
-        self.zones = _expand_to_countries(self.zones, self.data_dir)
+        self.zones = _expand_to_countries(self.zones, self.zones_db)
 
     def resolved_output_dir(self) -> Path:
         """Output folder for this run: outputs/ or outputs/<out_tag>/ if tagged."""

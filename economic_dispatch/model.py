@@ -722,7 +722,7 @@ def _h2_main_zones(cfg: RunConfig) -> dict[str, str]:
     happened to see last.
     """
     from .config import discover_zones
-    all_zones = discover_zones(cfg.data_dir)
+    all_zones = discover_zones(cfg.zones_db)
     df = pd.read_parquet(cfg.zones_db)
     prof = df[(df["section"] == "profiles") & (df["item"] == "Hydrogen Demand Profile")]
     dem = prof.groupby("zone")["value_num"].sum()
