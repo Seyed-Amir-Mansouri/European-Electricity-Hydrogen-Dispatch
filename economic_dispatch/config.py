@@ -101,71 +101,13 @@ class RunConfig:
     # >=MinTime-long committed runs); system-wide price/shed are unaffected
     # at this scale. See Formulation.md Sec 9a.
     enable_uc: bool = False
-    # Electricity-only, external-trade pricing: replace the fixed, unpriced
-    # net external exchange (exports_loader) with per-neighbour controllable
-    # import/export legs, each capped at that border's REAL physical line
-    # capacity (Networks.xlsx rating, both directions) and priced at the
-    # neighbour's OWN PLEXOS marginal price (0 if the neighbour has no
-    # PLEXOS price data, e.g. outside the modelled ENTSO-E area). Only
-    # affects the electricity balance; hydrogen external exchange is
-    # unaffected. Validated single-zone across all 21 CORE zones against two
-    # alternatives -- capping at historical (PLEXOS-realized) flow (mean
-    # corr 0.754) and leaving trade fully uncapped (mean corr 0.909) -- real
-    # line capacity scored highest (mean corr 0.958) and is the physically
-    # correct choice: a real joint solve is limited by actual transmission
-    # capacity, not by whatever volume PLEXOS's own solve happened to use.
-    # See model._priced_external_elec / exports_loader.elec_border_legs.
-    priced_external_elec: bool = False
-    # Hydrogen analogue of priced_external_elec: replace the fixed, unpriced
-    # net H2 cross-border exchange with per-neighbour-COUNTRY controllable
-    # import/export legs (PLEXOS's H2 side is country-granular, not
-    # zone-granular -- legs originate from each country's "main H2 zone",
-    # see model._h2_main_zones), each capped at that border's REAL physical
-    # pipeline capacity (Networks.xlsx "Hydrogen Pipelines" rating, both
-    # directions) and priced at the neighbour's own PLEXOS H2 marginal
-    # price. Steam-Methane-Reformer domestic production is NOT part of this
-    # (it isn't cross-border trade) -- it stays a fixed injection either
-    # way. Only affects the hydrogen balance; electricity external exchange
-    # is unaffected unless priced_external_elec is also set. See
-    # model._priced_external_h2 / exports_loader.h2_border_legs.
-    priced_external_h2: bool = False
-    # Model Steam-Methane-Reformer output as a real decision variable
-    # (bounded above by PLEXOS's own historical hourly SMR output for that
-    # country) instead of a rigid fixed injection forced exactly equal to
-    # that same historical value every hour. SMR has no cost/fuel/
-    # efficiency characteristics anywhere in this dataset (unlike Hydrogen
-    # (ccgt)/(fc) plants, which do), so its marginal cost is set to PLEXOS's
-    # own realized H2 price for that zone/hour -- the best available proxy,
-    # since SMR is confirmed to be the actual marginal (price-setting)
-    # resource for at least some countries (e.g. HR00, where SMR exactly
-    # covers demand every hour in PLEXOS with zero real ENS). Without this,
-    # a country whose H2 balance rests entirely on SMR (no cross-border
-    # capacity, no other flexible resource) sees its price degenerate to a
-    # 0/VOLL flip on every sub-MWh rounding residual between the (fixed,
-    # unpriced) SMR injection and its own demand profile -- letting SMR flex
-    # continuously below its own historical ceiling, at a real hour-varying
-    # cost, gives the LP room to close such residuals without hitting
-    # either extreme. See model.build_model (smr_gen).
-    smr_priced_generation: bool = False
-    # Fix each zone's electrolyser electricity consumption to PLEXOS's own
-    # historical "Electrolyser (load) [MW]" profile instead of letting the LP
-    # optimise it -- for price-tracking validation against PLEXOS, which
-    # dispatches the electrolyser exogenously (outside this LP's economic
-    # dispatch). See marginal_price_loader.DEFAULT_ELECTROLYSER_LOAD_DB.
-    # When hydrogen is also modelled (not electricity_only), this ALSO fixes
-    # the H2-side output directly to PLEXOS's own realized "Electrolyser
-    # (gen.) [MWH2]" (country-level -- allocated across a country's zones by
-    # each zone's own fixed load share) instead of deriving it from this
-    # model's assumed efficiency applied to the electricity-side fix above.
-    # See model._build (ely_h2_gen_da) / marginal_price_loader.DEFAULT_ELECTROLYSER_GEN_H2_DB.
-    fix_electrolyser_to_plexos: bool = False
     # Subtract PLEXOS's own "Demand Side Response Implicit [MW]" from the
     # electricity demand target, matching how PLEXOS itself defines net
     # demand (this is a signed correction -- activation reduces net demand,
     # deactivation raises it -- not a one-directional relief term). Needed
     # for a fair price-tracking comparison against PLEXOS: without it,
     # DE00's full-year correlation vs PLEXOS regressed from 0.978 to 0.88
-    # even after fixing the priced_external_elec sign bug; with both fixes
+    # even after fixing a priced-external-trade sign bug; with both fixes
     # together it's back to 0.978. See marginal_price_loader.DEFAULT_DSR_IMPLICIT_DB.
     subtract_dsr_implicit: bool = False
     # Skip the hydrogen side of the model entirely (no H2 balance, H2
@@ -176,40 +118,6 @@ class RunConfig:
     # electricity consumption still subtracts from the elec balance as
     # usual. Cuts LP size substantially at multi-zone scale.
     electricity_only: bool = False
-    # REPLACE every renewable generator's hourly availability with PLEXOS's
-    # own realized generation for that technology, discarding this model's
-    # own capacity x capacity-factor profile calculation entirely (PLEXOS
-    # dispatches these zero-marginal-cost, must-take resources at their
-    # full available output in virtually every hour, so its realized
-    # generation IS its available power). Single-variable techs (wind
-    # onshore, wind offshore, run-of-river) get gen_p's own upper bound set
-    # directly to the PLEXOS value. Techs where this model splits one
-    # PLEXOS category across several of its own generators (solar PV =
-    # Solar + Solar (rooftop); solar thermal = Solar (thermal) + Solar
-    # (thermal_with_storage); other renewables = the 5 Other RES
-    # sub-types) -- since PLEXOS doesn't publish that split -- get each
-    # individual generator's own bound set to the full category total (a
-    # generous, individually non-binding ceiling) plus a joint
-    # sum(gen_p) <= PLEXOS constraint enforcing the real combined limit.
-    # Zones with no generator of a technology to begin with are skipped
-    # (this replaces an existing generator's bound; it can't fabricate a
-    # generator that isn't there at all, e.g. BEOF's missing wind data).
-    # See model._override_renewable_upper_with_plexos /
-    # model._joint_renewable_constraints.
-    cap_renewables_to_plexos: bool = False
-    # For hydro storage with real installed capacity but a "...Flow Energy"
-    # inflow profile that's all-zero in the zone's own XLSX (a dead resource
-    # otherwise -- with charge power 0 for these kinds, zero inflow under the
-    # cyclic end-of-horizon closure forces discharge=0 for the whole
-    # horizon), use PLEXOS's own realized generation for that hydro kind as
-    # the hourly inflow instead. Applies to reservoir, pondage, and
-    # open-loop pumped storage only -- NOT closed-loop pumped storage, which
-    # has no natural inflow at all (it only recirculates what it pumps).
-    # Found via FR15: "Reservoir Flow Energy" was 0 for all 8,736 hours
-    # despite 182 MW / 56,800 MWh installed reservoir capacity, which on its
-    # own explained all 190 hours of real shedding that zone showed relative
-    # to PLEXOS (which never sheds). See model._build_storage.
-    fill_missing_hydro_inflow_from_plexos: bool = False
 
     # --- Economics (ASSUMPTIONS) ------------------------------------------
     # Marginal cost = VOM Price + fuel_term + co2_term, where

@@ -62,8 +62,8 @@ def elec_border_legs(selected: list[str], edf: pd.DataFrame) -> dict[tuple[str, 
     ``elec_net_export`` but keyed by neighbour instead of summed across all of
     a zone's external borders. Used to price each cross-border leg separately
     against its own neighbour's marginal price (model.py's
-    ``priced_external_elec``) rather than treating a zone's external exchange
-    as one fixed, unpriced net injection.
+    ``_priced_external_elec``) rather than treating a zone's external
+    exchange as one fixed, unpriced net injection.
     """
     sel = set(selected)
     out: dict[tuple[str, str], np.ndarray] = {}
@@ -185,7 +185,7 @@ def h2_border_legs(selected: list[str], main_map: dict[str, str],
     resolution as ``h2_net_export`` (IB* hub folding) but keyed by neighbour
     instead of summed into one net number per country. Used to price each H2
     cross-border leg separately against its own neighbour's PLEXOS H2
-    marginal price (model.py's ``priced_external_h2``), the H2 analogue of
+    marginal price (model.py's ``_priced_external_h2``), the H2 analogue of
     ``elec_border_legs``. Excludes SMR (that's domestic production, not
     cross-border trade -- see ``smr_injection``) and virtual source nodes
     like ``XAmmonia``/``XDZ``/``XMA``/``XNO``/``XUA`` (no real Networks.xlsx

@@ -168,7 +168,8 @@ def border_line_caps(carrier: str = "electricity", db_path: Path = DEFAULT_NETWO
     """{(frm, to): (cap_from_to_mw, cap_to_from_mw)} for every line of the
     given carrier, any pair -- unlike ``load_networks``, not filtered to a
     zone selection. Used to cap priced external-trade legs (model.py's
-    ``priced_external_elec``) at each border's real physical line rating."""
+    ``_priced_external_elec`` / ``_priced_external_h2``) at each border's
+    real physical line rating."""
     df = pd.read_parquet(db_path)
     sub = df[df["carrier"] == carrier]
     return {(frm, to): (float(ft), float(tf)) for frm, to, ft, tf in

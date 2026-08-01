@@ -243,18 +243,19 @@ def _build_storage(zdata: dict[str, ZoneData], cfg: RunConfig):
     # used only when the zone's own XLSX "...Flow Energy" profile is all-zero
     # despite the zone having real storage capacity (a dead resource
     # otherwise: with pchg=0 for these kinds, zero inflow under the cyclic
-    # end-of-horizon closure forces dis=0 for the whole horizon). See
-    # cfg.fill_missing_hydro_inflow_from_plexos.
-    plexos_inflow: dict[str, pd.DataFrame] = {}
-    if cfg.fill_missing_hydro_inflow_from_plexos:
-        from . import marginal_price_loader as mpl
-        h0, h1 = cfg.hour_slice()
-        ghours = pd.RangeIndex(h0, h1)
-        plexos_inflow = {
-            "Hydro reservoir": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_RESERVOIR_DB),
-            "Hydro pondage": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_PONDAGE_DB),
-            "Hydro open_ps": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_OPEN_PS_DB),
-        }
+    # end-of-horizon closure forces dis=0 for the whole horizon). Found via
+    # FR15: "Reservoir Flow Energy" was 0 for all 8,736 hours despite 182 MW
+    # / 56,800 MWh installed reservoir capacity, which on its own explained
+    # all 190 hours of real shedding that zone showed relative to PLEXOS
+    # (which never sheds).
+    from . import marginal_price_loader as mpl
+    h0, h1 = cfg.hour_slice()
+    ghours = pd.RangeIndex(h0, h1)
+    plexos_inflow = {
+        "Hydro reservoir": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_RESERVOIR_DB),
+        "Hydro pondage": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_PONDAGE_DB),
+        "Hydro open_ps": mpl.load_zone_series(cfg.zones, ghours, mpl.DEFAULT_HYDRO_OPEN_PS_DB),
+    }
 
     for z in cfg.zones:
         zd = zdata[z]
@@ -356,8 +357,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     zidx = pd.Index(zones, name=ZONE)
 
     gens, gupper = _build_generators(zdata, net, cfg)
-    if cfg.cap_renewables_to_plexos:
-        gens, gupper = _override_renewable_upper_with_plexos(zdata, gens, gupper, zones, cfg)
+    gens, gupper = _override_renewable_upper_with_plexos(zdata, gens, gupper, zones, cfg)
     storage, sinflow = _build_storage(zdata, cfg)
 
     uc_gens = uc_candidates(gens) if cfg.enable_uc else []
@@ -386,8 +386,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
             gen_lower.loc[{GEN: gid}] = msl_frac * prof  # prof is 0 (off) or pmax (on)
     gen_p = m.add_variables(lower=gen_lower, upper=gen_upper, name="gen_p")
 
-    if cfg.cap_renewables_to_plexos:
-        _joint_renewable_constraints(m, gens, gen_p, zones, hours, cfg)
+    _joint_renewable_constraints(m, gens, gen_p, zones, hours, cfg)
 
     A_gen = _incidence(gens["zone"], zones, GEN)
     gen_by_zone = (A_gen * gen_p).sum(GEN)
@@ -512,50 +511,14 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
                         for z in zones])
     ely_p = m.add_variables(lower=0.0, upper=_bc_z(ely_cap, zidx, hours), name="ely_p")
 
-    ely_h2_gen_da = None  # set below when fix_electrolyser_to_plexos fixes the H2 side too
-    if cfg.fix_electrolyser_to_plexos:
-        # Pin electrolyser consumption to PLEXOS's own historical dispatch
-        # (exogenous to this LP) instead of letting it optimise -- used for
-        # price-tracking validation. Clip to this model's own capacity so the
-        # equality can't exceed ely_p's upper bound.
-        from . import marginal_price_loader as mpl
-        h0, h1 = cfg.hour_slice()
-        ghours = pd.RangeIndex(h0, h1)
-        ely_hist = mpl.load_zone_series(zones, ghours, mpl.DEFAULT_ELECTROLYSER_LOAD_DB).to_numpy().T
-        ely_hist = np.minimum(np.clip(ely_hist, 0.0, None), np.vstack([ely_cap] * H).T)
-        ely_fixed_da = xr.DataArray(ely_hist, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
-        m.add_constraints(ely_p == ely_fixed_da, name="ely_p_fixed")
-
-        if not cfg.electricity_only:
-            # Also fix the H2-SIDE output directly to PLEXOS's own realized
-            # "Electrolyser (gen.) [MWH2]" instead of deriving it from our
-            # assumed efficiency applied to the (also PLEXOS-fixed)
-            # electricity load -- removes dependence on ely_eff entirely for
-            # this term. PLEXOS reports electrolyser generation only at
-            # COUNTRY granularity (unlike the zone-level electricity load
-            # above), so a country's total is allocated across its own
-            # zones in proportion to each zone's own fixed load share (a
-            # zone with zero load that hour gets zero H2 output, matching
-            # physical reality).
-            countries = sorted({z[:2] for z in zones})
-            h2_gen_df = mpl.load_zone_series([f"{c}_H2" for c in countries], ghours,
-                                             mpl.DEFAULT_ELECTROLYSER_GEN_H2_DB)
-            cpos = {c: i for i, c in enumerate(countries)}
-            country_total = np.zeros((len(countries), H))
-            for zi, z in enumerate(zones):
-                country_total[cpos[z[:2]]] += ely_hist[zi]
-            h2_gen_mat = np.vstack([h2_gen_df[f"{c}_H2"].to_numpy() for c in countries])
-            ely_h2_gen = np.zeros_like(ely_hist)
-            for zi, z in enumerate(zones):
-                ci = cpos[z[:2]]
-                ct = country_total[ci]
-                share = np.divide(ely_hist[zi], ct, out=np.zeros(H), where=ct > 0)
-                ely_h2_gen[zi] = share * h2_gen_mat[ci]
-            ely_h2_gen_da = xr.DataArray(ely_h2_gen, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
-
     if not cfg.electricity_only:
+        # H2 output is genuinely linked to electricity consumption via the
+        # electrolyser's own efficiency -- ely_p is a free LP variable, not
+        # pinned to PLEXOS's historical dispatch, so this couples the
+        # electricity and hydrogen balances through real physics rather than
+        # two independently-fixed numbers.
         ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
-        ely_h2_term = ely_h2_gen_da if ely_h2_gen_da is not None else ely_eff_da * ely_p
+        ely_h2_term = ely_eff_da * ely_p
         if cfg.enable_h2_terminal:
             term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
         else:
@@ -591,25 +554,25 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         dsr_df = mpl.load_zone_series(zones, ghours, mpl.DEFAULT_DSR_IMPLICIT_DB)
         dsr_da = xr.DataArray(dsr_df.to_numpy().T, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
         demand_e = demand_e - dsr_da
-    ext_e_obj = 0.0
-    ext_h2_obj = 0.0
-    need_fixed_e = not cfg.priced_external_elec
-    need_fixed_h2 = (not cfg.electricity_only) and (not cfg.priced_external_h2)
-    if cfg.priced_external_elec:
-        external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
-    if not cfg.electricity_only and cfg.priced_external_h2:
-        cross_border_h2, ext_h2_obj = _priced_external_h2(m, zones, hours, cfg)
-        external_h2 = cross_border_h2 + _fixed_h2_supply_injection(zones, hours, cfg)
-    if need_fixed_e or need_fixed_h2:
-        fixed_e, fixed_h2 = _external_exchange_all(zones, hours, cfg)
-        if need_fixed_e:
-            external_e = fixed_e
-        if need_fixed_h2:
-            external_h2 = fixed_h2
 
+    # External electricity/H2 exchange, both priced: per-neighbour
+    # controllable import/export legs capped at real physical line/pipeline
+    # capacity (Networks.xlsx rating, both directions) and priced at the
+    # neighbour's own PLEXOS marginal price -- validated single-zone across
+    # all 21 CORE zones against two alternatives for electricity: capping at
+    # historical (PLEXOS-realized) flow (mean corr 0.754) and leaving trade
+    # fully uncapped (mean corr 0.909); real line capacity scored highest
+    # (mean corr 0.958) and is the physically correct choice, since a real
+    # joint solve is limited by actual transmission capacity, not by
+    # whatever volume PLEXOS's own solve happened to use. See
+    # _priced_external_elec / _priced_external_h2.
+    external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
     smr_gen = None
     smr_obj = 0.0
-    if not cfg.electricity_only and cfg.smr_priced_generation:
+    ext_h2_obj = 0.0
+    if not cfg.electricity_only:
+        cross_border_h2, ext_h2_obj = _priced_external_h2(m, zones, hours, cfg)
+        external_h2 = cross_border_h2 + _fixed_h2_supply_injection(zones, hours, cfg)
         smr_gen, smr_obj, smr_fixed_da = _smr_priced_generation(m, zones, hours, cfg)
         external_h2 = external_h2 - smr_fixed_da  # SMR is now a variable, not a fixed injection
 
@@ -780,8 +743,7 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     (Networks.xlsx rating, both directions -- see
     network_loader.border_line_caps), priced at the neighbour's own PLEXOS
     marginal price (0 if the neighbour has no PLEXOS price data). Returns
-    (net_injection_expr, objective_cost_expr) to use in place of the fixed
-    ``external_e`` term -- see ``cfg.priced_external_elec``.
+    (net_injection_expr, objective_cost_expr) used as ``external_e``.
 
     Real line capacity was validated (single-zone, all 21 CORE zones)
     against two alternatives: capping at historical realized flow (mean
@@ -866,7 +828,7 @@ def _priced_external_h2(m: linopy.Model, zones: list[str], hours: pd.Index, cfg:
     Networks.xlsx line or PLEXOS price to look up, so both stay a fixed
     injection either way; see ``_fixed_h2_supply_injection``, which must be
     added back separately. Returns (net_injection_expr, objective_cost_expr)
-    to use in place of the fixed external_h2 term -- see cfg.priced_external_h2.
+    used as (part of) ``external_h2``.
     """
     from . import marginal_price_loader as mpl
 
@@ -950,10 +912,16 @@ def _smr_priced_generation(m: linopy.Model, zones: list[str], hours: pd.Index, c
     its main H2 zone, zero elsewhere -- same routing as ``smr_injection``),
     priced at PLEXOS's own realized H2 marginal price for that zone/hour --
     the best available proxy for SMR's marginal cost, since SMR has no
-    cost/fuel/efficiency data anywhere in this dataset. See
-    cfg.smr_priced_generation. Returns (smr_gen variable, objective cost
-    expr, fixed-injection DataArray to subtract from whichever fixed/priced
-    external_h2 term already added SMR as a plain fixed injection)."""
+    cost/fuel/efficiency data anywhere in this dataset -- confirmed to be
+    the actual marginal (price-setting) resource for at least some
+    countries (e.g. HR00, where SMR exactly covers demand every hour in
+    PLEXOS with zero real ENS). Without this, a country whose H2 balance
+    rests entirely on SMR (no cross-border capacity, no other flexible
+    resource) sees its price degenerate to a 0/VOLL flip on every sub-MWh
+    rounding residual between the (fixed, unpriced) SMR injection and its
+    own demand profile. Returns (smr_gen variable, objective cost expr,
+    fixed-injection DataArray to subtract from whichever priced external_h2
+    term already added SMR as a plain fixed injection)."""
     from . import marginal_price_loader as mpl
 
     zidx = pd.Index(zones, name=ZONE)
@@ -982,8 +950,7 @@ def _smr_priced_generation(m: linopy.Model, zones: list[str], hours: pd.Index, c
             # profile is read at full float precision -- without this, a
             # demand value a hair above SMR's rounded ceiling has nowhere to
             # go but shed_h at VOLL even though the two numbers represent
-            # the same real hour. See cfg.smr_priced_generation's docstring.
-            # Only where SMR is genuinely running that hour -- an hour with
+            # the same real hour. Only where SMR is genuinely running that hour -- an hour with
             # zero real SMR output (e.g. offline/maintenance) shouldn't
             # acquire a phantom 1 kW of capacity, and its cost is moot
             # either way once the ceiling is exactly 0.
@@ -1019,8 +986,7 @@ def _fixed_h2_supply_injection(zones: list[str], hours: pd.Index, cfg: RunConfig
 # Single-variable renewable techs: one of this model's own generators maps
 # 1:1 to one PLEXOS category, so its availability is fully REPLACED by
 # PLEXOS's realized generation (not just an upper bound layered on top of
-# this model's own capacity x profile calculation -- see
-# cfg.cap_renewables_to_plexos).
+# this model's own capacity x profile calculation).
 _RENEWABLE_SINGLE = [
     ("wind_onshore", "Wind (onshore) (MW)"),
     ("wind_offshore", "Wind (offshore) (MW)"),
@@ -1064,8 +1030,10 @@ def _override_renewable_upper_with_plexos(zdata: dict[str, ZoneData], gens: pd.D
                                           cfg: RunConfig) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
     """Replace every renewable generator's hourly availability with PLEXOS's
     own realized generation for that technology, discarding this model's
-    own capacity x capacity-factor profile calculation entirely -- see
-    cfg.cap_renewables_to_plexos. Also CREATES a generator for any zone
+    own capacity x capacity-factor profile calculation entirely (PLEXOS
+    dispatches these zero-marginal-cost, must-take resources at their full
+    available output in virtually every hour, so its realized generation IS
+    its available power). Also CREATES a generator for any zone
     that has real installed capacity for a technology but was skipped by
     _build_generators because its own profile happened to be all-zero
     (e.g. BEOF/DEKF's offshore wind: real capacity, empty profile data) --
@@ -1138,16 +1106,6 @@ def _joint_renewable_constraints(m: linopy.Model, gens: pd.DataFrame, gen_p, zon
             cap_da = xr.DataArray(px[z].to_numpy(), coords={HOUR: hours}, dims=[HOUR])
             expr = sum(gen_p.sel({GEN: gid}) for gid in present)
             m.add_constraints(expr <= cap_da, name=f"plexos_cap_{key}_{z}")
-
-
-def _external_exchange_all(zones, hours, cfg):
-    """Return (external_e, external_h2) net-injection arrays (import +).
-
-    Computed from the ``inputs/`` result databases so neighbours track the zone
-    selection (see exports_loader / inputs/EXPORTS_CALCULATION.md).
-    """
-    main_map = _h2_main_zones(cfg)
-    return exports_loader.load_external_injection(cfg, zones, hours, main_map)
 
 
 def _flow_terms(m: linopy.Model, lines: list[Line], zones: list[str], hours: pd.Index, tag: str):

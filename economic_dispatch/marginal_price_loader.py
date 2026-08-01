@@ -36,10 +36,10 @@ DEFAULT_DSR_IMPLICIT_DB = DEFAULT_EXPORTS_DIR / "dsr_implicit_electricity_2030.p
 DEFAULT_ELECTROLYSER_LOAD_DB = DEFAULT_EXPORTS_DIR / "electrolyser_load_electricity_2030.parquet"
 # PLEXOS's own realized renewable generation, used to cap our VRES/ROR/Other
 # RES generators at PLEXOS's max-available power (model.py's
-# cfg.cap_renewables_to_plexos) -- since these are effectively zero-cost
-# must-take resources, PLEXOS's realized generation IS its available power
-# (validated: matches our own capacity x profile almost exactly for the
-# large majority of zones/technologies).
+# _override_renewable_upper_with_plexos) -- since these are effectively
+# zero-cost must-take resources, PLEXOS's realized generation IS its
+# available power (validated: matches our own capacity x profile almost
+# exactly for the large majority of zones/technologies).
 DEFAULT_WIND_ONSHORE_DB = DEFAULT_EXPORTS_DIR / "wind_onshore_electricity_2030.parquet"
 DEFAULT_WIND_OFFSHORE_DB = DEFAULT_EXPORTS_DIR / "wind_offshore_electricity_2030.parquet"
 DEFAULT_ROR_DB = DEFAULT_EXPORTS_DIR / "ror_electricity_2030.parquet"
@@ -49,20 +49,18 @@ DEFAULT_OTHER_RES_DB = DEFAULT_EXPORTS_DIR / "other_res_electricity_2030.parquet
 # PLEXOS's own realized generation for the three natural-inflow hydro storage
 # kinds (reservoir, pondage, open-loop pumped -- NOT closed-loop, which has no
 # natural inflow at all, it only recirculates what it pumps). Used as a
-# fallback hourly inflow (model.cfg.fill_missing_hydro_inflow_from_plexos)
-# when a zone's own XLSX "...Flow Energy" profile is all-zero despite the
-# zone having real storage capacity for that kind -- same rationale as
-# cap_renewables_to_plexos, applied to storage inflow instead of VRES/ROR
-# availability.
+# fallback hourly inflow (model.py's _build_storage) when a zone's own XLSX
+# "...Flow Energy" profile is all-zero despite the zone having real storage
+# capacity for that kind -- same rationale as the renewable-availability
+# override above, applied to storage inflow instead of VRES/ROR availability.
 DEFAULT_HYDRO_RESERVOIR_DB = DEFAULT_EXPORTS_DIR / "hydro_reservoir_electricity_2030.parquet"
 DEFAULT_HYDRO_PONDAGE_DB = DEFAULT_EXPORTS_DIR / "hydro_pondage_electricity_2030.parquet"
 DEFAULT_HYDRO_OPEN_PS_DB = DEFAULT_EXPORTS_DIR / "hydro_open_ps_electricity_2030.parquet"
-# PLEXOS's own realized electrolyser H2 OUTPUT (country-level, "Hourly H2
+# PLEXOS's own realized electrolyser H2 output (country-level, "Hourly H2
 # Data" sheet -- unlike the electricity-side "Electrolyser (load) [MW]"
-# above, which is zone-level) -- used by cfg.fix_electrolyser_to_plexos to
-# pin the H2 balance's electrolyser term directly to PLEXOS's realized
-# generation instead of deriving it from our own assumed efficiency applied
-# to the (also PLEXOS-fixed) electricity load.
+# above, which is zone-level). Not currently used by model.py (the
+# electrolyser is a free variable there, linked to its own electricity
+# consumption only via efficiency) -- kept as reference data for validation.
 DEFAULT_ELECTROLYSER_GEN_H2_DB = DEFAULT_EXPORTS_DIR / "electrolyser_gen_hydrogen_2030.parquet"
 
 # sheet name, row holding "Category", row holding "Country"/zone code, first data row
