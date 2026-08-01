@@ -41,7 +41,8 @@ def _country_groups() -> list[dict]:
     for z in discover_zones():
         groups.setdefault(z[:2], []).append(z)
     return [
-        {"name": f"{_COUNTRY_NAMES.get(c, c)} ({c})", "code": c, "zones": sorted(zs)}
+        {"name": f"{_COUNTRY_NAMES.get(c, c)} ({c})", "code": c,
+         "map_path": f"dispatcher/country-maps/{c.lower()}.svg", "zones": sorted(zs)}
         for c, zs in sorted(groups.items(), key=lambda kv: _COUNTRY_NAMES.get(kv[0], kv[0]))
     ]
 

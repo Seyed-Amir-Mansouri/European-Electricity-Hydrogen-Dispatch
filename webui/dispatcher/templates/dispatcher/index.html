@@ -1,4 +1,5 @@
 {% extends "dispatcher/base.html" %}
+{% load static %}
 {% block title %}CORE Dispatch{% endblock %}
 {% block content %}
 
@@ -20,7 +21,7 @@
       {% for country in country_groups %}
         <details class="country-group" open>
           <summary>
-            <span class="country-code">{{ country.code }}</span>
+            <img class="country-map" src="{% static country.map_path %}" alt="{{ country.code }} map">
             <span class="country-name">{{ country.name }}</span>
           </summary>
           {% for z in country.zones %}
