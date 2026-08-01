@@ -18,16 +18,6 @@
 </div>
 
 <div class="panel">
-  <h2>Electricity price vs. PLEXOS</h2>
-  <img class="chart" src="data:image/png;base64,{{ plot_e }}" alt="Electricity price chart">
-</div>
-
-<div class="panel">
-  <h2>Hydrogen price vs. PLEXOS</h2>
-  <img class="chart" src="data:image/png;base64,{{ plot_h }}" alt="Hydrogen price chart">
-</div>
-
-<div class="panel">
   <h2>Electricity metrics</h2>
   <table class="metrics">
     <thead><tr>
@@ -81,5 +71,16 @@
     PLEXOS reference price (<code>XX_H2</code>). "corr (excl. scarcity)" excludes hours where either
     series is at/above 2,000 EUR/MWh.</p>
 </div>
+
+{% for r in zone_results %}
+  <div class="panel">
+    <h2>{{ r.zone }} &mdash; Electricity price vs. PLEXOS</h2>
+    {{ r.plot_e|safe }}
+  </div>
+  <div class="panel">
+    <h2>{{ r.zone }} &mdash; Hydrogen price vs. PLEXOS</h2>
+    {{ r.plot_h|safe }}
+  </div>
+{% endfor %}
 
 {% endblock %}

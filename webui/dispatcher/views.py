@@ -9,15 +9,11 @@ project's development.
 """
 from __future__ import annotations
 
-import base64
-import io
 from datetime import date
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 from django.shortcuts import render
 
 from economic_dispatch.config import (
@@ -37,16 +33,17 @@ _COUNTRY_NAMES = {
 }
 
 
-def _country_groups() -> dict[str, list[str]]:
-    """{"Austria (AT)": ["AT00"], "Germany (DE)": ["DE00", "DEKF"], ...},
+def _country_groups() -> list[dict]:
+    """[{"name": "Austria (AT)", "code": "AT", "zones": ["AT00"]},
+    {"name": "Germany (DE)", "code": "DE", "zones": ["DE00", "DEKF"]}, ...],
     sorted by country name -- one checkbox group per CORE country."""
     groups: dict[str, list[str]] = {}
     for z in discover_zones():
         groups.setdefault(z[:2], []).append(z)
-    return {
-        f"{_COUNTRY_NAMES.get(c, c)} ({c})": sorted(zs)
+    return [
+        {"name": f"{_COUNTRY_NAMES.get(c, c)} ({c})", "code": c, "zones": sorted(zs)}
         for c, zs in sorted(groups.items(), key=lambda kv: _COUNTRY_NAMES.get(kv[0], kv[0]))
-    }
+    ]
 
 
 def _day_of_year_2030(d: date) -> int:
@@ -118,12 +115,9 @@ def run_dispatch(request):
             zone=z,
             metrics_e=_metrics(ours_e, px_e, shed_e),
             metrics_h=_metrics(ours_h, px_h, shed_h),
+            plot_e=_plot_prices(hours, ours_e, px_e, f"{z} — Electricity price (EUR/MWh)"),
+            plot_h=_plot_prices(hours, ours_h, px_h, f"{z} — Hydrogen price (EUR/MWh)"),
         ))
-
-    plot_e = _plot_prices(hours, cfg.zones, build.price_e, plexos_price_e,
-                          "Electricity marginal price (EUR/MWh)", key_fn=lambda z: z)
-    plot_h = _plot_prices(hours, cfg.zones, build.price_h, plexos_price_h,
-                          "Hydrogen marginal price (EUR/MWh)", key_fn=lambda z: f"{z[:2]}_H2")
 
     return render(request, "dispatcher/results.html", {
         "country_groups": _country_groups(),
@@ -136,8 +130,6 @@ def run_dispatch(request):
         "start_day": start_day,
         "end_day": end_day,
         "zone_results": zone_results,
-        "plot_e": plot_e,
-        "plot_h": plot_h,
     })
 
 
@@ -162,28 +154,21 @@ def _metrics(ours: np.ndarray, plexos: np.ndarray | None, shed: np.ndarray) -> d
     )
 
 
-def _plot_prices(hours, zones, ours_da, plexos_df, title, key_fn) -> str:
-    """Render ours (solid) vs PLEXOS (dashed) price lines for every zone,
-    one colour per zone, as a base64 PNG for direct <img> embedding."""
-    fig, ax = plt.subplots(figsize=(11, 4.2))
-    colors = plt.cm.tab10.colors
-    for i, z in enumerate(zones):
-        ours = ours_da.sel(zone=z).to_numpy()
-        color = colors[i % len(colors)]
-        ax.plot(hours, ours, label=f"{z} (ours)", color=color, linewidth=1.4)
-        key = key_fn(z)
-        if key in plexos_df.columns:
-            px = plexos_df[key].to_numpy()[hours[0]:hours[-1] + 1]
-            ax.plot(hours, px, label=f"{z} (PLEXOS)", color=color,
-                   linestyle="--", linewidth=1.0, alpha=0.8)
-    ax.set_xlabel("Hour of year")
-    ax.set_ylabel(title)
-    ax.set_title(title)
-    ax.legend(fontsize=8, ncol=2)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110)
-    plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None, title: str) -> str:
+    """Interactive two-line Plotly chart: blue = ours, red = PLEXOS. Returns
+    an HTML <div> fragment for direct embedding (plotly.js itself is loaded
+    once via CDN in the base template, not repeated per chart)."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hours, y=ours, mode="lines", name="Ours",
+                             line=dict(color="#2563eb", width=1.8)))
+    if plexos is not None:
+        fig.add_trace(go.Scatter(x=hours, y=plexos, mode="lines", name="PLEXOS",
+                                 line=dict(color="#dc2626", width=1.5, dash="dot")))
+    fig.update_layout(
+        title=title, xaxis_title="Hour of year", yaxis_title="EUR/MWh",
+        template="plotly_white", height=320, autosize=True,
+        margin=dict(l=55, r=20, t=45, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig.to_html(full_html=False, include_plotlyjs=False,
+                       config={"displaylogo": False, "responsive": True})

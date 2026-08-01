@@ -17,10 +17,13 @@
   <div class="panel">
     <h2>Zones / countries</h2>
     <div class="country-grid">
-      {% for country, zone_list in country_groups.items %}
+      {% for country in country_groups %}
         <details class="country-group" open>
-          <summary>{{ country }}</summary>
-          {% for z in zone_list %}
+          <summary>
+            <span class="country-code">{{ country.code }}</span>
+            <span class="country-name">{{ country.name }}</span>
+          </summary>
+          {% for z in country.zones %}
             <div class="zone-check">
               <input type="checkbox" id="zone-{{ z }}" name="zones" value="{{ z }}"
                      {% if z in selected_zones %}checked{% endif %}>
