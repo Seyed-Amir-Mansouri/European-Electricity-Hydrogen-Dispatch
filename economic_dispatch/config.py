@@ -129,6 +129,24 @@ class RunConfig:
     # is unaffected unless priced_external_elec is also set. See
     # model._priced_external_h2 / exports_loader.h2_border_legs.
     priced_external_h2: bool = False
+    # Model Steam-Methane-Reformer output as a real decision variable
+    # (bounded above by PLEXOS's own historical hourly SMR output for that
+    # country) instead of a rigid fixed injection forced exactly equal to
+    # that same historical value every hour. SMR has no cost/fuel/
+    # efficiency characteristics anywhere in this dataset (unlike Hydrogen
+    # (ccgt)/(fc) plants, which do), so its marginal cost is set to PLEXOS's
+    # own realized H2 price for that zone/hour -- the best available proxy,
+    # since SMR is confirmed to be the actual marginal (price-setting)
+    # resource for at least some countries (e.g. HR00, where SMR exactly
+    # covers demand every hour in PLEXOS with zero real ENS). Without this,
+    # a country whose H2 balance rests entirely on SMR (no cross-border
+    # capacity, no other flexible resource) sees its price degenerate to a
+    # 0/VOLL flip on every sub-MWh rounding residual between the (fixed,
+    # unpriced) SMR injection and its own demand profile -- letting SMR flex
+    # continuously below its own historical ceiling, at a real hour-varying
+    # cost, gives the LP room to close such residuals without hitting
+    # either extreme. See model.build_model (smr_gen).
+    smr_priced_generation: bool = False
     # Fix each zone's electrolyser electricity consumption to PLEXOS's own
     # historical "Electrolyser (load) [MW]" profile instead of letting the LP
     # optimise it -- for price-tracking validation against PLEXOS, which

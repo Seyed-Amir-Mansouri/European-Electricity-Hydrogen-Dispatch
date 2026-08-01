@@ -607,6 +607,12 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         if need_fixed_h2:
             external_h2 = fixed_h2
 
+    smr_gen = None
+    smr_obj = 0.0
+    if not cfg.electricity_only and cfg.smr_priced_generation:
+        smr_gen, smr_obj, smr_fixed_da = _smr_priced_generation(m, zones, hours, cfg)
+        external_h2 = external_h2 - smr_fixed_da  # SMR is now a variable, not a fixed injection
+
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     # Dump/curtailment slacks absorb EXCESS supply (e.g. a fixed net import that
     # exceeds absorbable load) — the counterpart of shedding, as in PLEXOS's
@@ -624,6 +630,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     if not cfg.electricity_only:
         h2_lhs = (ely_h2_term + term_h2 + net_h + external_h2
+                  + (smr_gen if smr_gen is not None else 0.0)
                   + dis_h2_by_zone - ch_h2_by_zone + shed_h
                   - h2_cons_by_zone - dump_h)
         m.add_constraints(h2_lhs == demand_h, name="h2_balance")
@@ -663,7 +670,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         obj = obj + cfg.h2_terminal_price * term_h2.sum() \
             + cfg.voll_eur_per_mwh * shed_h.sum() \
             + cfg.dump_penalty_eur_per_mwh * dump_h.sum() \
-            + ext_h2_obj
+            + ext_h2_obj + smr_obj
     # A small per-MWh throughput cost on every storage device forbids charging
     # and discharging in the same hour without a binary. It is not needed for
     # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
@@ -935,6 +942,59 @@ def _priced_external_h2(m: linopy.Model, zones: list[str], hours: pd.Index, cfg:
     net_injection = (A_da * imp).sum(pname) - (A_da * exp).sum(pname)
     obj = (price_da * imp).sum() - (price_da * exp).sum()
     return net_injection, obj
+
+
+def _smr_priced_generation(m: linopy.Model, zones: list[str], hours: pd.Index, cfg: RunConfig):
+    """Steam-Methane-Reformer as a real generation variable: bounded above by
+    PLEXOS's own historical hourly SMR output for that country (assigned at
+    its main H2 zone, zero elsewhere -- same routing as ``smr_injection``),
+    priced at PLEXOS's own realized H2 marginal price for that zone/hour --
+    the best available proxy for SMR's marginal cost, since SMR has no
+    cost/fuel/efficiency data anywhere in this dataset. See
+    cfg.smr_priced_generation. Returns (smr_gen variable, objective cost
+    expr, fixed-injection DataArray to subtract from whichever fixed/priced
+    external_h2 term already added SMR as a plain fixed injection)."""
+    from . import marginal_price_loader as mpl
+
+    zidx = pd.Index(zones, name=ZONE)
+    main_map = _h2_main_zones(cfg)
+    h0, h1 = cfg.hour_slice()
+    ghours = pd.RangeIndex(h0, h1)
+    smr_df = pd.read_parquet(Path(cfg.exports_dir) / "smr_production_2030.parquet")
+
+    fixed_inj = exports_loader.smr_injection(zones, main_map, smr_df)
+    fixed_rows = [fixed_inj.get(z, np.zeros(len(smr_df)))[h0:h1] for z in zones]
+    fixed_da = xr.DataArray(np.vstack(fixed_rows), coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+
+    countries_here = sorted({c for c, z in main_map.items() if z in zones})
+    price_df = mpl.load_zone_series([f"{c}_H2" for c in countries_here], ghours,
+                                    mpl.DEFAULT_MARGINAL_PRICE_H2_DB)
+    zpos = {z: i for i, z in enumerate(zones)}
+    upper = np.zeros((len(zones), len(hours)))
+    cost = np.zeros((len(zones), len(hours)))
+    for c in countries_here:
+        i = zpos[main_map[c]]
+        if c in smr_df.columns:
+            vals = np.clip(pd.to_numeric(smr_df[c], errors="coerce").fillna(0.0).to_numpy()[h0:h1], 0.0, None)
+            has_smr = vals > 0
+            # +0.001 MW (1 kW) of headroom, matching PLEXOS's own export
+            # rounding to 3 decimals (MW): while this model's own demand
+            # profile is read at full float precision -- without this, a
+            # demand value a hair above SMR's rounded ceiling has nowhere to
+            # go but shed_h at VOLL even though the two numbers represent
+            # the same real hour. See cfg.smr_priced_generation's docstring.
+            # Only where SMR is genuinely running that hour -- an hour with
+            # zero real SMR output (e.g. offline/maintenance) shouldn't
+            # acquire a phantom 1 kW of capacity, and its cost is moot
+            # either way once the ceiling is exactly 0.
+            upper[i] = np.where(has_smr, vals + 1e-3, 0.0)
+            cost[i] = np.where(has_smr, price_df[f"{c}_H2"].to_numpy(), 0.0)
+
+    upper_da = xr.DataArray(upper, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+    cost_da = xr.DataArray(cost, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+    smr_gen = m.add_variables(lower=0.0, upper=upper_da, name="smr_gen")
+    obj = (cost_da * smr_gen).sum()
+    return smr_gen, obj, fixed_da
 
 
 def _fixed_h2_supply_injection(zones: list[str], hours: pd.Index, cfg: RunConfig) -> xr.DataArray:
