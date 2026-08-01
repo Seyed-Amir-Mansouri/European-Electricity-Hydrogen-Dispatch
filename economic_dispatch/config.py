@@ -68,6 +68,26 @@ def discover_zones(data_dir=DEFAULT_DATA_DIR) -> list[str]:
     )
 
 
+def _expand_to_countries(zones: list[str], data_dir) -> list[str]:
+    """Expand a zone list to include every sibling zone of the same country
+    (2-letter prefix) present in ``data_dir``.
+
+    PLEXOS's hydrogen side is modelled at COUNTRY granularity: all of a
+    country's H2 demand/SMR/electrolyser economy is attributed to a single
+    "main H2 zone" (see model._h2_main_zones), reached from any sibling zone
+    by an effectively unlimited intra-country pipeline already present in
+    Networks.xlsx (e.g. DE00<->DEKF at 200,000 MW). Selecting only DE00 would
+    silently drop DEKF's own electrolyser (if any) and its electricity
+    network -- a country can have more than one electrolyser across its
+    zones, and excluding a sibling zone entirely (rather than just letting
+    it carry none of the H2 balance) loses real capacity, not just an
+    H2-side technicality.
+    """
+    all_zones = discover_zones(data_dir)
+    countries = {z[:2] for z in zones}
+    return sorted(set(zones) | {z for z in all_zones if z[:2] in countries})
+
+
 @dataclass
 class RunConfig:
     # --- Scope -------------------------------------------------------------
@@ -171,6 +191,14 @@ class RunConfig:
     # --- Solver ------------------------------------------------------------
     solver_name: str = "highs"
     mip_rel_gap: float = 1e-4
+
+    def __post_init__(self) -> None:
+        # Auto-expand to every sibling zone of the same country (see
+        # _expand_to_countries) -- a country's H2 economy (and, for the
+        # electricity side, its own internal network) can span multiple
+        # zones, so picking just one would silently drop the others'
+        # electrolysers/capacity rather than modelling them at zero.
+        self.zones = _expand_to_countries(self.zones, self.data_dir)
 
     def resolved_output_dir(self) -> Path:
         """Output folder for this run: outputs/ or outputs/<out_tag>/ if tagged."""
