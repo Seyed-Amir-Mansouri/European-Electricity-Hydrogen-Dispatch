@@ -5,9 +5,9 @@
 <title>{% block title %}CORE Dispatch{% endblock %}</title>
 <style>
   :root {
-    --bg: #0f1420; --panel: #171d2c; --border: #2a3348; --text: #e8ecf4;
-    --muted: #93a0bd; --accent: #4f8dfd; --accent-soft: #22314f;
-    --good: #34d399; --bad: #f87171;
+    --bg: #f4f6fa; --panel: #ffffff; --border: #dde3ec; --text: #1a2233;
+    --muted: #5b6578; --accent: #2563eb; --accent-soft: #e7eefd;
+    --good: #0f9d68; --bad: #d0392a;
   }
   * { box-sizing: border-box; }
   body {
@@ -42,7 +42,7 @@
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field label { font-size: 13px; color: var(--muted); }
   input[type=date] {
-    background: #0c1119; border: 1px solid var(--border); color: var(--text);
+    background: #fff; border: 1px solid var(--border); color: var(--text);
     padding: 8px 10px; border-radius: 6px; font-size: 14px;
   }
   button.run {
@@ -51,7 +51,7 @@
     margin-top: 18px;
   }
   button.run:hover { filter: brightness(1.08); }
-  .errors { background: #3a1d24; border: 1px solid #6b2b36; color: #ffb4bd;
+  .errors { background: #fdecea; border: 1px solid #f3b6ae; color: #8a2a1f;
             padding: 12px 16px; border-radius: 8px; margin-bottom: 18px; }
   .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
   img.chart { width: 100%; border-radius: 8px; background: #fff; }

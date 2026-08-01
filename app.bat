@@ -33,11 +33,11 @@ echo Applying Django migrations...
 ".venv\Scripts\python.exe" webui\manage.py migrate
 
 :run
-echo Starting server on 0.0.0.0:8000 (reachable at http://100.121.87.117:8000 and http://localhost:8000) ...
+echo Starting server on 0.0.0.0:8000 (reachable at http://100.121.87.117:8000 and http://127.0.0.1:8000) ...
 start "Django dev server" ".venv\Scripts\python.exe" webui\manage.py runserver 0.0.0.0:8000
 
 echo Waiting a few seconds for the server to come up, then opening it in your browser...
 ping 127.0.0.1 -n 4 >nul
-start "" "http://localhost:8000/"
+start "" "http://127.0.0.1:8000/"
 
 endlocal
