@@ -599,7 +599,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
     if not cfg.electricity_only and cfg.priced_external_h2:
         cross_border_h2, ext_h2_obj = _priced_external_h2(m, zones, hours, cfg)
-        external_h2 = cross_border_h2 + _smr_only_injection(zones, hours, cfg)
+        external_h2 = cross_border_h2 + _fixed_h2_supply_injection(zones, hours, cfg)
     if need_fixed_e or need_fixed_h2:
         fixed_e, fixed_h2 = _external_exchange_all(zones, hours, cfg)
         if need_fixed_e:
@@ -854,10 +854,12 @@ def _priced_external_h2(m: linopy.Model, zones: list[str], hours: pd.Index, cfg:
     which is zone-level), so legs originate from each country's "main H2
     zone" (see ``_h2_main_zones``); other zones in the same country get no
     injection from this term, matching the existing fixed-exchange
-    behaviour. Does NOT include SMR (that's domestic production, not
-    cross-border trade -- see ``_smr_only_injection``, which must be added
-    back separately). Returns (net_injection_expr, objective_cost_expr) to
-    use in place of the fixed external_h2 term -- see cfg.priced_external_h2.
+    behaviour. Does NOT include SMR or virtual-source H2 (ammonia-import
+    terminals, external non-ENTSO-E pipelines) -- neither has a real
+    Networks.xlsx line or PLEXOS price to look up, so both stay a fixed
+    injection either way; see ``_fixed_h2_supply_injection``, which must be
+    added back separately. Returns (net_injection_expr, objective_cost_expr)
+    to use in place of the fixed external_h2 term -- see cfg.priced_external_h2.
     """
     from . import marginal_price_loader as mpl
 
@@ -935,16 +937,22 @@ def _priced_external_h2(m: linopy.Model, zones: list[str], hours: pd.Index, cfg:
     return net_injection, obj
 
 
-def _smr_only_injection(zones: list[str], hours: pd.Index, cfg: RunConfig) -> xr.DataArray:
-    """Steam-Methane-Reformer output as a (zone, hour) injection DataArray --
-    always fixed/domestic, added back on top of ``_priced_external_h2``'s
-    cross-border legs (which deliberately exclude it)."""
+def _fixed_h2_supply_injection(zones: list[str], hours: pd.Index, cfg: RunConfig) -> xr.DataArray:
+    """Steam-Methane-Reformer output PLUS virtual-source H2 (ammonia-import
+    terminals, external non-ENTSO-E pipelines -- see
+    ``exports_loader.exogenous_h2_injection``) as a (zone, hour) injection
+    DataArray -- always fixed/uncapacitated, added back on top of
+    ``_priced_external_h2``'s cross-border legs (which deliberately exclude
+    both: neither has a real Networks.xlsx line or PLEXOS price to look up)."""
     main_map = _h2_main_zones(cfg)
     h0, h1 = cfg.hour_slice()
     smr = pd.read_parquet(Path(cfg.exports_dir) / "smr_production_2030.parquet")
+    hdf = pd.read_parquet(Path(cfg.exports_dir) / "crossborder_hydrogen_2030.parquet")
     inj = exports_loader.smr_injection(zones, main_map, smr)
+    for M, arr in exports_loader.exogenous_h2_injection(zones, main_map, hdf).items():
+        inj[M] = inj.get(M, np.zeros(len(hdf))) + arr
     zidx = pd.Index(zones, name=ZONE)
-    rows = [inj.get(z, np.zeros(len(smr)))[h0:h1] for z in zones]
+    rows = [inj.get(z, np.zeros(len(hdf)))[h0:h1] for z in zones]
     return xr.DataArray(np.vstack(rows), coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
 
 

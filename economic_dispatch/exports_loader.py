@@ -118,13 +118,44 @@ def smr_injection(selected: list[str], main_map: dict[str, str],
     return out
 
 
+def exogenous_h2_injection(selected: list[str], main_map: dict[str, str],
+                           hdf: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Non-cross-border H2 supply from virtual source nodes (MW, + = supply
+    added to the H2 balance) -- edges like ``XAmmonia->NL_H2`` (ammonia-
+    import-terminal H2) or ``XDZ->ES_H2``/``XNO->DE_H2`` (external, non-ENTSO-E
+    pipeline sources) whose OTHER endpoint isn't a real ``*_H2`` network node.
+    These have no physical line in Networks.xlsx and no PLEXOS market price
+    (they aren't countries), so -- like SMR -- they're always a fixed,
+    uncapacitated injection at the main zone, independent of whether
+    cross-border H2 trade with REAL neighbours is priced or not.
+    """
+    sel_c = {country(z) for z in selected}
+    out: dict[str, np.ndarray] = {}
+    for l, r, arr in _h2_edges(hdf):
+        if l.endswith("_H2") and r.endswith("_H2"):
+            continue  # a real cross-border edge -- handled elsewhere
+        real, virtual = (r, l) if r.endswith("_H2") else (l, r)
+        if virtual.endswith("_H2"):
+            continue  # neither side is virtual (shouldn't happen); skip
+        C = _cc(real)
+        if C not in sel_c:
+            continue
+        M = main_map.get(C)
+        if M is None:
+            continue
+        sign = 1.0 if real == r else -1.0  # + = flow INTO the real node
+        out[M] = out.get(M, 0.0) + sign * arr
+    return out
+
+
 def h2_net_export(selected: list[str], main_map: dict[str, str],
                   hdf: pd.DataFrame, smr: pd.DataFrame) -> dict[str, np.ndarray]:
     """Net hydrogen export (MW, + = export) per country's main zone, full-year.
 
     Resolves ``IB*`` interconnector hubs, classifies each edge by the §2 sign
     rule keeping only edges whose other endpoint's country is outside the
-    selection, then folds Steam-Methane-Reformer output in as imported H2.
+    selection, then folds Steam-Methane-Reformer output and virtual-source
+    (ammonia/external-pipeline) H2 in as imported H2.
     """
     sel_c = {country(z) for z in selected}
     out = {z: np.zeros(len(hdf)) for z in main_map.values()}
@@ -156,12 +187,16 @@ def h2_border_legs(selected: list[str], main_map: dict[str, str],
     cross-border leg separately against its own neighbour's PLEXOS H2
     marginal price (model.py's ``priced_external_h2``), the H2 analogue of
     ``elec_border_legs``. Excludes SMR (that's domestic production, not
-    cross-border trade -- see ``smr_injection``).
+    cross-border trade -- see ``smr_injection``) and virtual source nodes
+    like ``XAmmonia``/``XDZ``/``XMA``/``XNO``/``XUA`` (no real Networks.xlsx
+    line or PLEXOS price to look up -- see ``exogenous_h2_injection``).
     """
     sel = set(selected)
     sel_c = {country(z) for z in selected}
     out: dict[tuple[str, str], np.ndarray] = {}
     for l, r, arr in _h2_edges(hdf):
+        if not (l.endswith("_H2") and r.endswith("_H2")):
+            continue  # virtual source, not a real cross-border line
         xc, yc = _cc(l), _cc(r)
         if xc in sel_c and yc not in sel_c:
             C, N, sign = xc, yc, 1.0
