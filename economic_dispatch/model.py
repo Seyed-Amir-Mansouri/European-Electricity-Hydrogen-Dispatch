@@ -512,6 +512,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
                         for z in zones])
     ely_p = m.add_variables(lower=0.0, upper=_bc_z(ely_cap, zidx, hours), name="ely_p")
 
+    ely_h2_gen_da = None  # set below when fix_electrolyser_to_plexos fixes the H2 side too
     if cfg.fix_electrolyser_to_plexos:
         # Pin electrolyser consumption to PLEXOS's own historical dispatch
         # (exogenous to this LP) instead of letting it optimise -- used for
@@ -525,8 +526,36 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         ely_fixed_da = xr.DataArray(ely_hist, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
         m.add_constraints(ely_p == ely_fixed_da, name="ely_p_fixed")
 
+        if not cfg.electricity_only:
+            # Also fix the H2-SIDE output directly to PLEXOS's own realized
+            # "Electrolyser (gen.) [MWH2]" instead of deriving it from our
+            # assumed efficiency applied to the (also PLEXOS-fixed)
+            # electricity load -- removes dependence on ely_eff entirely for
+            # this term. PLEXOS reports electrolyser generation only at
+            # COUNTRY granularity (unlike the zone-level electricity load
+            # above), so a country's total is allocated across its own
+            # zones in proportion to each zone's own fixed load share (a
+            # zone with zero load that hour gets zero H2 output, matching
+            # physical reality).
+            countries = sorted({z[:2] for z in zones})
+            h2_gen_df = mpl.load_zone_series([f"{c}_H2" for c in countries], ghours,
+                                             mpl.DEFAULT_ELECTROLYSER_GEN_H2_DB)
+            cpos = {c: i for i, c in enumerate(countries)}
+            country_total = np.zeros((len(countries), H))
+            for zi, z in enumerate(zones):
+                country_total[cpos[z[:2]]] += ely_hist[zi]
+            h2_gen_mat = np.vstack([h2_gen_df[f"{c}_H2"].to_numpy() for c in countries])
+            ely_h2_gen = np.zeros_like(ely_hist)
+            for zi, z in enumerate(zones):
+                ci = cpos[z[:2]]
+                ct = country_total[ci]
+                share = np.divide(ely_hist[zi], ct, out=np.zeros(H), where=ct > 0)
+                ely_h2_gen[zi] = share * h2_gen_mat[ci]
+            ely_h2_gen_da = xr.DataArray(ely_h2_gen, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+
     if not cfg.electricity_only:
         ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
+        ely_h2_term = ely_h2_gen_da if ely_h2_gen_da is not None else ely_eff_da * ely_p
         if cfg.enable_h2_terminal:
             term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
         else:
@@ -563,11 +592,20 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         dsr_da = xr.DataArray(dsr_df.to_numpy().T, coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
         demand_e = demand_e - dsr_da
     ext_e_obj = 0.0
+    ext_h2_obj = 0.0
+    need_fixed_e = not cfg.priced_external_elec
+    need_fixed_h2 = (not cfg.electricity_only) and (not cfg.priced_external_h2)
     if cfg.priced_external_elec:
         external_e, ext_e_obj = _priced_external_elec(m, zones, hours, cfg)
-        _, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
-    else:
-        external_e, external_h2 = _external_exchange_all(zdata, zones, hours, cfg)
+    if not cfg.electricity_only and cfg.priced_external_h2:
+        cross_border_h2, ext_h2_obj = _priced_external_h2(m, zones, hours, cfg)
+        external_h2 = cross_border_h2 + _smr_only_injection(zones, hours, cfg)
+    if need_fixed_e or need_fixed_h2:
+        fixed_e, fixed_h2 = _external_exchange_all(zones, hours, cfg)
+        if need_fixed_e:
+            external_e = fixed_e
+        if need_fixed_h2:
+            external_h2 = fixed_h2
 
     shed_e = m.add_variables(lower=0.0, coords=[zidx, hours], name="shed_e")
     # Dump/curtailment slacks absorb EXCESS supply (e.g. a fixed net import that
@@ -585,7 +623,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     m.add_constraints(elec_lhs == demand_e, name="elec_balance")
 
     if not cfg.electricity_only:
-        h2_lhs = (ely_eff_da * ely_p + term_h2 + net_h + external_h2
+        h2_lhs = (ely_h2_term + term_h2 + net_h + external_h2
                   + dis_h2_by_zone - ch_h2_by_zone + shed_h
                   - h2_cons_by_zone - dump_h)
         m.add_constraints(h2_lhs == demand_h, name="h2_balance")
@@ -624,7 +662,8 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     if not cfg.electricity_only:
         obj = obj + cfg.h2_terminal_price * term_h2.sum() \
             + cfg.voll_eur_per_mwh * shed_h.sum() \
-            + cfg.dump_penalty_eur_per_mwh * dump_h.sum()
+            + cfg.dump_penalty_eur_per_mwh * dump_h.sum() \
+            + ext_h2_obj
     # A small per-MWh throughput cost on every storage device forbids charging
     # and discharging in the same hour without a binary. It is not needed for
     # lossy devices (round-trip efficiency < 1, e.g. batteries at ~92%): there
@@ -699,17 +738,31 @@ def _profile_da(zdata, zones, hours, col) -> xr.DataArray:
                         dims=[ZONE, HOUR])
 
 
-def _h2_main_zones(zdata, zones) -> dict[str, str]:
-    """Main H2 zone per country = the country's selected zone with the most H2 demand."""
+def _h2_main_zones(cfg: RunConfig) -> dict[str, str]:
+    """Main H2 zone per country = the country's zone with the most H2 demand,
+    computed over the FULL declared zone universe (``discover_zones``), not
+    just the current run's selection -- stable regardless of which subset of
+    zones a given run tests, so a single-zone run attributes SMR,
+    electrolyser generation, and H2 cross-border trade to the SAME zone a
+    full joint run would (e.g. Belgium's H2 always routes through BEOF,
+    never BE00, even when BE00 is tested alone). Selection-dependent main
+    zones were a real bug: testing BEOF alone (Belgium's real main zone)
+    still broke because the external-leg node lookup could independently
+    resolve a neighbouring country like DE to whichever of DE00/DEKF the dict
+    happened to see last.
+    """
+    from .config import discover_zones
+    all_zones = discover_zones(cfg.data_dir)
+    df = pd.read_parquet(cfg.zones_db)
+    prof = df[(df["section"] == "profiles") & (df["item"] == "Hydrogen Demand Profile")]
+    dem = prof.groupby("zone")["value_num"].sum()
     best: dict[str, str] = {}
-    dem: dict[str, float] = {}
-    for z in zones:
-        prof = zdata[z].profiles
-        d = float(_num(prof["Hydrogen Demand Profile"].to_numpy()).sum()) \
-            if "Hydrogen Demand Profile" in prof else 0.0
+    best_val: dict[str, float] = {}
+    for z in all_zones:
+        d = float(dem.get(z, 0.0))
         c = z[:2]
-        if c not in best or d > dem[c]:
-            best[c], dem[c] = z, d
+        if c not in best or d > best_val[c]:
+            best[c], best_val[c] = z, d
     return best
 
 
@@ -787,6 +840,112 @@ def _priced_external_elec(m: linopy.Model, zones: list[str], hours: pd.Index, cf
     net_injection = (A_da * imp).sum(pname) - (A_da * exp).sum(pname)
     obj = (price_da * imp).sum() - (price_da * exp).sum()
     return net_injection, obj
+
+
+def _priced_external_h2(m: linopy.Model, zones: list[str], hours: pd.Index, cfg: RunConfig):
+    """Priced/controllable import & export legs for every zone's EXTERNAL H2
+    neighbours (any neighbouring COUNTRY outside ``zones``) -- the hydrogen
+    analogue of ``_priced_external_elec``: each leg is a decision variable
+    capped at that border's REAL physical pipeline capacity (Networks.xlsx
+    "Hydrogen Pipelines" rating, both directions -- see
+    network_loader.border_line_caps), priced at the neighbour's own PLEXOS
+    H2 marginal price (0 if the neighbour has no PLEXOS H2 price data).
+    PLEXOS's H2 side is modelled at COUNTRY granularity (unlike electricity,
+    which is zone-level), so legs originate from each country's "main H2
+    zone" (see ``_h2_main_zones``); other zones in the same country get no
+    injection from this term, matching the existing fixed-exchange
+    behaviour. Does NOT include SMR (that's domestic production, not
+    cross-border trade -- see ``_smr_only_injection``, which must be added
+    back separately). Returns (net_injection_expr, objective_cost_expr) to
+    use in place of the fixed external_h2 term -- see cfg.priced_external_h2.
+    """
+    from . import marginal_price_loader as mpl
+
+    zidx = pd.Index(zones, name=ZONE)
+    main_map = _h2_main_zones(cfg)
+    hdf = pd.read_parquet(Path(cfg.exports_dir) / "crossborder_hydrogen_2030.parquet")
+    legs = exports_loader.h2_border_legs(zones, main_map, hdf)
+
+    if not legs:
+        zero = xr.DataArray(np.zeros((len(zones), len(hours))),
+                            coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
+        return zero, 0.0
+
+    h0, h1 = cfg.hour_slice()
+    pairs = sorted(legs)  # [(main_zone, neighbour_country), ...], deterministic order
+    pname = "h2leg"
+    pidx = pd.Index([f"{z}|{n}" for z, n in pairs], name=pname)
+
+    line_caps = nl.border_line_caps("hydrogen", cfg.networks_db)
+    # Networks.xlsx "Hydrogen Pipelines" node codes for our OWN countries are
+    # their real main H2 zone (main_map); for other (non-selected) countries
+    # they're a different pipeline-endpoint code (e.g. "IT" -> "ITCA", "DK"
+    # -> "DKNS"), each with an unambiguous 2-letter-prefix = country code --
+    # EXCEPT a country with several of our own zones (e.g. DE00/DEKF both
+    # prefix "DE"), where picking whichever the dict saw last could resolve
+    # to the wrong (non-main, possibly unconnected) sibling zone. Prefer
+    # main_map's real main zone for any such country first.
+    sel_countries = {z[:2] for z in zones}
+    country_node: dict[str, str] = {c: z for c, z in main_map.items() if c not in sel_countries}
+    for pair in line_caps:
+        for n in pair:
+            c = n[:2]
+            if c not in sel_countries and c not in country_node:
+                country_node[c] = n
+
+    def _border_cap(z: str, n: str) -> tuple[float, float]:
+        """(import cap z<-n, export cap z->n) MW -- 0 if no line/no mapped node."""
+        node = country_node.get(n)
+        if node is None:
+            return 0.0, 0.0
+        if (z, node) in line_caps:
+            ft, tf = line_caps[(z, node)]
+            return tf, ft
+        if (node, z) in line_caps:
+            ft, tf = line_caps[(node, z)]
+            return ft, tf
+        return 0.0, 0.0
+
+    imp_vec = np.array([_border_cap(z, n)[0] for z, n in pairs])
+    exp_vec = np.array([_border_cap(z, n)[1] for z, n in pairs])
+    imp_cap = np.tile(imp_vec[:, None], (1, len(hours)))
+    exp_cap = np.tile(exp_vec[:, None], (1, len(hours)))
+
+    neighbors = sorted({n for _, n in pairs})
+    ghours = pd.RangeIndex(h0, h1)
+    price_df = mpl.load_zone_series([f"{n}_H2" for n in neighbors], ghours,
+                                    mpl.DEFAULT_MARGINAL_PRICE_H2_DB)
+    price_mat = np.vstack([price_df[f"{n}_H2"].to_numpy() for _, n in pairs])  # (npairs, H)
+
+    imp_cap_da = xr.DataArray(imp_cap, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+    exp_cap_da = xr.DataArray(exp_cap, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+    price_da = xr.DataArray(price_mat, coords={pname: pidx, HOUR: hours}, dims=[pname, HOUR])
+
+    imp = m.add_variables(lower=0.0, upper=imp_cap_da, name="h2_ext_imp")
+    exp = m.add_variables(lower=0.0, upper=exp_cap_da, name="h2_ext_exp")
+
+    A = np.zeros((len(pairs), len(zones)))
+    zpos = {z: i for i, z in enumerate(zones)}
+    for i, (z, _n) in enumerate(pairs):
+        A[i, zpos[z]] = 1.0
+    A_da = xr.DataArray(A, coords={pname: pidx, ZONE: zidx}, dims=[pname, ZONE])
+
+    net_injection = (A_da * imp).sum(pname) - (A_da * exp).sum(pname)
+    obj = (price_da * imp).sum() - (price_da * exp).sum()
+    return net_injection, obj
+
+
+def _smr_only_injection(zones: list[str], hours: pd.Index, cfg: RunConfig) -> xr.DataArray:
+    """Steam-Methane-Reformer output as a (zone, hour) injection DataArray --
+    always fixed/domestic, added back on top of ``_priced_external_h2``'s
+    cross-border legs (which deliberately exclude it)."""
+    main_map = _h2_main_zones(cfg)
+    h0, h1 = cfg.hour_slice()
+    smr = pd.read_parquet(Path(cfg.exports_dir) / "smr_production_2030.parquet")
+    inj = exports_loader.smr_injection(zones, main_map, smr)
+    zidx = pd.Index(zones, name=ZONE)
+    rows = [inj.get(z, np.zeros(len(smr)))[h0:h1] for z in zones]
+    return xr.DataArray(np.vstack(rows), coords={ZONE: zidx, HOUR: hours}, dims=[ZONE, HOUR])
 
 
 # Single-variable renewable techs: one of this model's own generators maps
@@ -913,13 +1072,13 @@ def _joint_renewable_constraints(m: linopy.Model, gens: pd.DataFrame, gen_p, zon
             m.add_constraints(expr <= cap_da, name=f"plexos_cap_{key}_{z}")
 
 
-def _external_exchange_all(zdata, zones, hours, cfg):
+def _external_exchange_all(zones, hours, cfg):
     """Return (external_e, external_h2) net-injection arrays (import +).
 
     Computed from the ``inputs/`` result databases so neighbours track the zone
     selection (see exports_loader / inputs/EXPORTS_CALCULATION.md).
     """
-    main_map = _h2_main_zones(zdata, zones)
+    main_map = _h2_main_zones(cfg)
     return exports_loader.load_external_injection(cfg, zones, hours, main_map)
 
 

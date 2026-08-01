@@ -81,18 +81,11 @@ def _cc(node: str) -> str:
     return node[:-3] if node.endswith("_H2") else node
 
 
-def h2_net_export(selected: list[str], main_map: dict[str, str],
-                  hdf: pd.DataFrame, smr: pd.DataFrame) -> dict[str, np.ndarray]:
-    """Net hydrogen export (MW, + = export) per country's main zone, full-year.
-
-    Resolves ``IB*`` interconnector hubs, classifies each edge by the §2 sign
-    rule keeping only edges whose other endpoint's country is outside the
-    selection, then folds Steam-Methane-Reformer output in as imported H2.
-    """
-    sel_c = {country(z) for z in selected}
+def _h2_edges(hdf: pd.DataFrame) -> list[tuple[str, str, np.ndarray]]:
+    """Resolve ``IB*`` interconnector hubs (A->hub + hub->B => A->B, carrying
+    the A->hub value) and return the flattened (from_node, to_node, array)
+    edge list -- shared by ``h2_net_export`` and ``h2_border_legs``."""
     flows = _flow_cols(hdf)
-
-    # 4a. Resolve IB* hubs: A->hub + hub->B  =>  A->B (carrying the A->hub value).
     hub_sinks: dict[str, list[str]] = {}
     for f in flows:
         l, r = f.split("->")
@@ -109,9 +102,33 @@ def h2_net_export(selected: list[str], main_map: dict[str, str],
                 edges.append((l, sink, arr))
         else:
             edges.append((l, r, arr))
+    return edges
 
+
+def smr_injection(selected: list[str], main_map: dict[str, str],
+                  smr: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Steam-Methane-Reformer output as a per-main-zone injection (MW, + =
+    domestic supply added to the H2 balance) -- always fixed/domestic,
+    independent of whether cross-border H2 trade is priced or not."""
+    out: dict[str, np.ndarray] = {}
+    for C in {country(z) for z in selected}:
+        M = main_map.get(C)
+        if M is not None and C in smr.columns:
+            out[M] = out.get(M, 0.0) + _num(smr[C])
+    return out
+
+
+def h2_net_export(selected: list[str], main_map: dict[str, str],
+                  hdf: pd.DataFrame, smr: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Net hydrogen export (MW, + = export) per country's main zone, full-year.
+
+    Resolves ``IB*`` interconnector hubs, classifies each edge by the §2 sign
+    rule keeping only edges whose other endpoint's country is outside the
+    selection, then folds Steam-Methane-Reformer output in as imported H2.
+    """
+    sel_c = {country(z) for z in selected}
     out = {z: np.zeros(len(hdf)) for z in main_map.values()}
-    for l, r, arr in edges:
+    for l, r, arr in _h2_edges(hdf):
         xc, yc = _cc(l), _cc(r)
         if xc in sel_c and yc not in sel_c:
             C, sign = xc, 1.0
@@ -123,11 +140,45 @@ def h2_net_export(selected: list[str], main_map: dict[str, str],
         if M is not None:
             out[M] = out[M] + sign * arr
 
-    # 4c. SMR is domestic H2 supply -> a negative export at the main zone.
-    for C in sel_c:
+    # SMR is domestic H2 supply -> a negative export at the main zone.
+    smr_inj = smr_injection(selected, main_map, smr)
+    for M, arr in smr_inj.items():
+        out[M] = out[M] - arr
+    return out
+
+
+def h2_border_legs(selected: list[str], main_map: dict[str, str],
+                   hdf: pd.DataFrame) -> dict[tuple[str, str], np.ndarray]:
+    """Per-(main zone, external neighbour COUNTRY) signed net H2 flow (MW, +
+    = zone exports to that neighbour), full-year arrays -- same edge
+    resolution as ``h2_net_export`` (IB* hub folding) but keyed by neighbour
+    instead of summed into one net number per country. Used to price each H2
+    cross-border leg separately against its own neighbour's PLEXOS H2
+    marginal price (model.py's ``priced_external_h2``), the H2 analogue of
+    ``elec_border_legs``. Excludes SMR (that's domestic production, not
+    cross-border trade -- see ``smr_injection``).
+    """
+    sel = set(selected)
+    sel_c = {country(z) for z in selected}
+    out: dict[tuple[str, str], np.ndarray] = {}
+    for l, r, arr in _h2_edges(hdf):
+        xc, yc = _cc(l), _cc(r)
+        if xc in sel_c and yc not in sel_c:
+            C, N, sign = xc, yc, 1.0
+        elif yc in sel_c and xc not in sel_c:
+            C, N, sign = yc, xc, -1.0
+        else:
+            continue
         M = main_map.get(C)
-        if M is not None and C in smr.columns:
-            out[M] = out[M] - _num(smr[C])
+        if M is None or M not in sel:
+            # C's real main H2 zone isn't part of THIS run's selection (e.g.
+            # testing BE00 alone when Belgium's main zone is BEOF) -- can't
+            # attribute this country's cross-border H2 trade to any zone in
+            # the model, so it's dropped (same as SMR silently no-op'ing via
+            # smr_injection's safe .get() lookup in that case).
+            continue
+        key = (M, N)
+        out[key] = out.get(key, 0.0) + sign * arr
     return out
 
 

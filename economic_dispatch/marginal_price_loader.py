@@ -57,6 +57,13 @@ DEFAULT_OTHER_RES_DB = DEFAULT_EXPORTS_DIR / "other_res_electricity_2030.parquet
 DEFAULT_HYDRO_RESERVOIR_DB = DEFAULT_EXPORTS_DIR / "hydro_reservoir_electricity_2030.parquet"
 DEFAULT_HYDRO_PONDAGE_DB = DEFAULT_EXPORTS_DIR / "hydro_pondage_electricity_2030.parquet"
 DEFAULT_HYDRO_OPEN_PS_DB = DEFAULT_EXPORTS_DIR / "hydro_open_ps_electricity_2030.parquet"
+# PLEXOS's own realized electrolyser H2 OUTPUT (country-level, "Hourly H2
+# Data" sheet -- unlike the electricity-side "Electrolyser (load) [MW]"
+# above, which is zone-level) -- used by cfg.fix_electrolyser_to_plexos to
+# pin the H2 balance's electrolyser term directly to PLEXOS's realized
+# generation instead of deriving it from our own assumed efficiency applied
+# to the (also PLEXOS-fixed) electricity load.
+DEFAULT_ELECTROLYSER_GEN_H2_DB = DEFAULT_EXPORTS_DIR / "electrolyser_gen_hydrogen_2030.parquet"
 
 # sheet name, row holding "Category", row holding "Country"/zone code, first data row
 _ELEC_SHEET = ("Hourly Market Data", 11, 12, 14)
@@ -117,6 +124,7 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
                             out_hydro_reservoir: Path = DEFAULT_HYDRO_RESERVOIR_DB,
                             out_hydro_pondage: Path = DEFAULT_HYDRO_PONDAGE_DB,
                             out_hydro_open_ps: Path = DEFAULT_HYDRO_OPEN_PS_DB,
+                            out_electrolyser_gen_h2: Path = DEFAULT_ELECTROLYSER_GEN_H2_DB,
                             n_hours: int = HOURS_PER_YEAR) -> dict[str, Path]:
     """Extract every zone's/country's hourly marginal price (electricity +
     hydrogen), Demand Side Response Implicit, Electrolyser (load), every
@@ -163,11 +171,16 @@ def build_marginal_price_db(ref_path: Path = DEFAULT_PLEXOS_REF,
 
         sheet, cat_i, country_i, data0 = _H2_SHEET
         print(f"Extracting hydrogen series from '{sheet}'...")
-        h2 = _extract_sheet(wb[sheet], cat_i, country_i, data0, {"price": "Marginal Cost"}, n_hours)
-        out_h2.parent.mkdir(parents=True, exist_ok=True)
-        h2["price"].to_parquet(out_h2, compression="zstd")
-        print(f"  wrote {out_h2.name}  ({h2['price'].shape[0]} hours x {h2['price'].shape[1]} countries)")
-        written["price_h2"] = out_h2
+        h2 = _extract_sheet(wb[sheet], cat_i, country_i, data0, {
+            "price": "Marginal Cost",
+            "electrolyser_gen": "Electrolyser (gen.)",
+        }, n_hours)
+        for key, out_path in [("price", out_h2), ("electrolyser_gen", out_electrolyser_gen_h2)]:
+            df = h2[key]
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(out_path, compression="zstd")
+            print(f"  wrote {out_path.name}  ({df.shape[0]} hours x {df.shape[1]} countries)")
+            written[key if key != "price" else "price_h2"] = out_path
     finally:
         wb.close()
     return written

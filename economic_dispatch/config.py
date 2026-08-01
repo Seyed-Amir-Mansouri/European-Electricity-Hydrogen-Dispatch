@@ -116,11 +116,30 @@ class RunConfig:
     # capacity, not by whatever volume PLEXOS's own solve happened to use.
     # See model._priced_external_elec / exports_loader.elec_border_legs.
     priced_external_elec: bool = False
+    # Hydrogen analogue of priced_external_elec: replace the fixed, unpriced
+    # net H2 cross-border exchange with per-neighbour-COUNTRY controllable
+    # import/export legs (PLEXOS's H2 side is country-granular, not
+    # zone-granular -- legs originate from each country's "main H2 zone",
+    # see model._h2_main_zones), each capped at that border's REAL physical
+    # pipeline capacity (Networks.xlsx "Hydrogen Pipelines" rating, both
+    # directions) and priced at the neighbour's own PLEXOS H2 marginal
+    # price. Steam-Methane-Reformer domestic production is NOT part of this
+    # (it isn't cross-border trade) -- it stays a fixed injection either
+    # way. Only affects the hydrogen balance; electricity external exchange
+    # is unaffected unless priced_external_elec is also set. See
+    # model._priced_external_h2 / exports_loader.h2_border_legs.
+    priced_external_h2: bool = False
     # Fix each zone's electrolyser electricity consumption to PLEXOS's own
     # historical "Electrolyser (load) [MW]" profile instead of letting the LP
     # optimise it -- for price-tracking validation against PLEXOS, which
     # dispatches the electrolyser exogenously (outside this LP's economic
     # dispatch). See marginal_price_loader.DEFAULT_ELECTROLYSER_LOAD_DB.
+    # When hydrogen is also modelled (not electricity_only), this ALSO fixes
+    # the H2-side output directly to PLEXOS's own realized "Electrolyser
+    # (gen.) [MWH2]" (country-level -- allocated across a country's zones by
+    # each zone's own fixed load share) instead of deriving it from this
+    # model's assumed efficiency applied to the electricity-side fix above.
+    # See model._build (ely_h2_gen_da) / marginal_price_loader.DEFAULT_ELECTROLYSER_GEN_H2_DB.
     fix_electrolyser_to_plexos: bool = False
     # Subtract PLEXOS's own "Demand Side Response Implicit [MW]" from the
     # electricity demand target, matching how PLEXOS itself defines net
