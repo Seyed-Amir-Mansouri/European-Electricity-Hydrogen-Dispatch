@@ -1,5 +1,5 @@
 {% extends "dispatcher/base.html" %}
-{% block title %}CORE Dispatch — Select run{% endblock %}
+{% block title %}CORE Dispatch{% endblock %}
 {% block content %}
 
 {% if errors %}
@@ -30,9 +30,6 @@
         </details>
       {% endfor %}
     </div>
-    <p class="note">Picking any one zone of a country automatically includes its sibling zones too
-      (a country's hydrogen supply — SMR, electrolysers — is modelled as one shared system across
-      its zones, e.g. Germany's <code>DE00</code> + <code>DEKF</code>).</p>
   </div>
 
   <div class="panel">
