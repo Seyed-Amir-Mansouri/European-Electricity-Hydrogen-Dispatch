@@ -36,7 +36,7 @@ terminal.
 python run_dispatch.py                                                # all zones, day 1
 python run_dispatch.py --zones DE00,FR00 --start-day 10 --end-day 10  # a single day
 python run_dispatch.py --start-day 10 --end-day 16                    # a 7-day horizon
-python run_dispatch.py --reserves
+python run_dispatch.py --zones DE00 --uc                              # unit commitment
 ```
 
 Everything the model needs is in the **`inputs/` NT2030 databases** — zone data,
@@ -67,7 +67,6 @@ CLI flags:
 |------|---------|
 | `--zones DE00,FR00,…` | subset of zones (default: all zones in the database) |
 | `--start-day S --end-day E` | multi-day horizon covering days `S..E` inclusive (`(E-S+1)·24` hours) |
-| `--reserves` | enable FCR/FRR head-room constraints |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
 Results are written to `outputs/` and a balance-validation check prints at the

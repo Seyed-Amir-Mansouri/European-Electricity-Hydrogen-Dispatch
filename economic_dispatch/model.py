@@ -475,10 +475,6 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
         if ramp_commit["ramp_dn"].to_numpy(float).max() > 0:
             m.add_constraints(-delta <= rdn, name="ramp_dn")
 
-    if cfg.enable_reserves:
-        sto_reserve = (storage, dis) if have_sto else None
-        _add_reserves(m, zdata, zones, hours, commit, gen_p, sto_reserve)
-
     mc = xr.DataArray(gens["mc"].to_numpy(float), coords={GEN: gen_index}, dims=[GEN])
     obj = (mc * gen_p).sum() \
         + cfg.voll_eur_per_mwh * shed_e.sum() \
@@ -956,35 +952,3 @@ def _bc_line(da: xr.DataArray, hours: pd.Index) -> xr.DataArray:
     return da.expand_dims({HOUR: hours}).transpose(dim, HOUR)
 
 
-def _add_reserves(m, zdata, zones, hours, commit, gen_p, sto_reserve=None):
-    """FCR+FRR: spare headroom of thermal fleets + electricity storage >= requirement.
-
-    PLEXOS draws its reserve pool from every available resource, not just
-    thermal plant: battery and hydro (reservoir/pumped-storage) discharge
-    headroom count towards FCR/FRR alongside spare thermal capacity. With no
-    commitment binary, the whole thermal fleet capacity is available for
-    reserve (headroom = pmax(fleet) - gen_p); each electricity storage device
-    contributes its spare discharge headroom (Pdis - dis).
-    """
-    cidx = commit.index
-    capacity = xr.DataArray(commit["pmax"].to_numpy(float), coords={GEN: cidx}, dims=[GEN])
-    headroom = capacity - gen_p.sel({GEN: cidx})
-    A = _incidence(commit["zone"], zones, GEN)
-    head_by_zone = (A * headroom).sum(GEN)
-
-    if sto_reserve is not None:
-        storage, dis = sto_reserve
-        e_sto = storage[storage["carrier"] == "electricity"]
-        if len(e_sto) > 0:
-            sidx = e_sto.index
-            pdis = xr.DataArray(e_sto["pdis"].to_numpy(float), coords={STO: sidx}, dims=[STO])
-            sto_headroom = pdis - dis.sel({STO: sidx})
-            A_sto = _incidence(e_sto["zone"], zones, STO)
-            head_by_zone = head_by_zone + (A_sto * sto_headroom).sum(STO)
-
-    req = []
-    for z in zones:
-        r = zdata[z].reserves
-        req.append(r.get("Total (FCR) (MW/h)", 0.0) + r.get("Total (FRR) (MW/h)", 0.0))
-    req_da = xr.DataArray(np.array(req), coords={ZONE: pd.Index(zones, name=ZONE)}, dims=[ZONE])
-    m.add_constraints(head_by_zone >= req_da, name="reserves")
