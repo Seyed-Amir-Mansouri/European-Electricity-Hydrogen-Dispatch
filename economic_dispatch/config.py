@@ -83,10 +83,7 @@ class RunConfig:
     networks_db: Path = DEFAULT_NETWORKS_DB
     out_tag: str | None = None
 
-    enable_storage: bool = True
-    enable_ramps: bool = True
     enable_reserves: bool = False
-    enable_h2_terminal: bool = True
     enable_h2_storage: bool = True
     cyclic_storage: bool = True
     enable_uc: bool = False

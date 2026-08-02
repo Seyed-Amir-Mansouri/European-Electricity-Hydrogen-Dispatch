@@ -3,9 +3,9 @@
 Examples
 --------
     python run_dispatch.py                          # all 23 zones, day 1
-    python run_dispatch.py --zones DE00,FR00 --day 10        # a single day (10th)
+    python run_dispatch.py --zones DE00,FR00 --start-day 10 --end-day 10   # a single day (10th)
     python run_dispatch.py --start-day 10 --end-day 16       # a 7-day horizon (168 h)
-    python run_dispatch.py --no-ramps --reserves
+    python run_dispatch.py --reserves
     python run_dispatch.py --zones DE00 --uc            # unit commitment (min up/down time)
 """
 from __future__ import annotations
@@ -23,19 +23,14 @@ def parse_args() -> RunConfig:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--zones", default=None,
                    help="comma-separated zone codes (default: all 23)")
-    p.add_argument("--day", type=int, default=None,
-                   help="single day of year (1-364); shorthand for --start-day D --end-day D")
     p.add_argument("--start-day", type=int, default=None,
                    help="first day of a multi-day horizon (1-364)")
     p.add_argument("--end-day", type=int, default=None,
                    help="last day of a multi-day horizon, inclusive (1-364)")
-    p.add_argument("--no-storage", action="store_true")
-    p.add_argument("--no-ramps", action="store_true")
     p.add_argument("--reserves", action="store_true", help="enable FCR/FRR constraints")
     p.add_argument("--uc", action="store_true",
                    help="enable unit commitment (small MILP; currently min up/down time, "
                         "only Gas conv_old1/ccgt_old1 for DE00; see config.enable_uc)")
-    p.add_argument("--no-h2-terminal", action="store_true")
     p.add_argument("--out-tag", default=None,
                    help="write results to outputs/<TAG>/ instead of outputs/ (keep runs side by side)")
     a = p.parse_args()
@@ -43,8 +38,6 @@ def parse_args() -> RunConfig:
     if a.start_day is not None or a.end_day is not None:
         start = a.start_day if a.start_day is not None else a.end_day
         end = a.end_day if a.end_day is not None else a.start_day
-    elif a.day is not None:
-        start = end = a.day
     else:
         start = end = 1
     if not (1 <= start <= end <= 364):
@@ -61,11 +54,8 @@ def parse_args() -> RunConfig:
     missing = [z for z in cfg.zones if z not in available]
     if missing:
         p.error(f"zone(s) not in {Path(cfg.zones_db).name}: {missing}. Available: {available}")
-    cfg.enable_storage = not a.no_storage
-    cfg.enable_ramps = not a.no_ramps
     cfg.enable_reserves = a.reserves
     cfg.enable_uc = a.uc
-    cfg.enable_h2_terminal = not a.no_h2_terminal
     cfg.out_tag = a.out_tag
     return cfg
 

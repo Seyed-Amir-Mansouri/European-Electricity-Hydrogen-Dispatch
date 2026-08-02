@@ -368,7 +368,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
                 window = gp_capped.sel({HOUR: day_hours}).sum(HOUR)
                 m.add_constraints(window <= day_budget, name=f"daily_hours_cap_{d}")
 
-    have_sto = cfg.enable_storage and len(storage) > 0
+    have_sto = len(storage) > 0
     if have_sto:
         sidx = storage.index
         pdis = xr.DataArray(storage["pdis"].to_numpy(float), coords={STO: sidx}, dims=[STO])
@@ -412,10 +412,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
     if not cfg.electricity_only:
         ely_eff_da = xr.DataArray(ely_eff, coords={ZONE: zidx}, dims=[ZONE])
         ely_h2_term = ely_eff_da * ely_p
-        if cfg.enable_h2_terminal:
-            term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
-        else:
-            term_cap = np.zeros(len(zones))
+        term_cap = np.array([zdata[z].h2_assets.get("Terminal (Hydrogen) (MW)", 0.0) for z in zones])
         term_h2 = m.add_variables(lower=0.0, upper=_bc_z(term_cap, zidx, hours), name="term_h2")
 
         A_h2 = A_gen.copy()
@@ -468,7 +465,7 @@ def build_model(zdata: dict[str, ZoneData], net: NetworkData, cfg: RunConfig,
 
     ramp_commit = commit.drop(index=uc_gens, errors="ignore") if uc_gens else commit
     ramp_cidx = ramp_commit.index
-    if cfg.enable_ramps and len(ramp_commit) > 0:
+    if len(ramp_commit) > 0:
         rup = xr.DataArray(ramp_commit["ramp_up"].to_numpy(float), coords={GEN: ramp_cidx}, dims=[GEN])
         rdn = xr.DataArray(ramp_commit["ramp_dn"].to_numpy(float), coords={GEN: ramp_cidx}, dims=[GEN])
         gp_c = gen_p.sel({GEN: ramp_cidx})
