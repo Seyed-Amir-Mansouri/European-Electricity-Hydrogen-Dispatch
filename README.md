@@ -67,6 +67,7 @@ CLI flags:
 |------|---------|
 | `--zones DE00,FR00,…` | subset of zones (default: all zones in the database) |
 | `--start-day S --end-day E` | multi-day horizon covering days `S..E` inclusive (`(E-S+1)·24` hours) |
+| `--uc` | enable unit commitment (small MILP; min up/down time, currently only Gas conv_old1/ccgt_old1 for DE00) |
 | `--out-tag NAME` | write results to `outputs/NAME/` instead of `outputs/` (keep runs side by side) |
 
 Results are written to `outputs/` and a balance-validation check prints at the
