@@ -3,7 +3,7 @@
 </p>
 
 A **linear-programming economic dispatch** over the **Central-European CORE
-region** — the database covers the 23 ENTSO-E bidding zones of the 13 CORE
+region** — the database covers the 20 ENTSO-E bidding zones of the 13 CORE
 Capacity-Calculation-Region countries (AT, BE, CZ, DE, FR, HR, HU, LU, NL, PL,
 RO, SI, SK) — coupling two energy carriers, **electricity** and **hydrogen**,
 using [linopy](https://linopy.readthedocs.io) + the open-source **HiGHS** solver.
