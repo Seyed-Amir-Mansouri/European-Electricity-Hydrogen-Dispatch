@@ -70,12 +70,18 @@
 </div>
 
 {% for r in zone_results %}
+  {% if r.plot_mix %}
+    <div class="panel">
+      <h2>{{ r.zone }} &mdash; Technology share</h2>
+      {{ r.plot_mix|safe }}
+    </div>
+  {% endif %}
   <div class="panel">
-    <h2>{{ r.zone }} &mdash; Electricity price vs. PLEXOS</h2>
+    <h2>{{ r.zone }} Electricity Price: Ours vs. PLEXOS</h2>
     {{ r.plot_e|safe }}
   </div>
   <div class="panel">
-    <h2>{{ r.zone }} &mdash; Hydrogen price vs. PLEXOS</h2>
+    <h2>{{ r.zone }} Hydrogen Price: Ours vs. PLEXOS</h2>
     {{ r.plot_h|safe }}
   </div>
 {% endfor %}

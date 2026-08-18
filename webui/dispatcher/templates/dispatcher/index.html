@@ -16,7 +16,13 @@
   {% csrf_token %}
 
   <div class="panel">
-    <h2>Zones / countries</h2>
+    <div class="section-header">
+      <h2>Zones / countries</h2>
+      <div class="zone-select-actions">
+        <button type="button" id="select-all-zones" class="reset-btn">Select all</button>
+        <button type="button" id="deselect-all-zones" class="reset-btn">Deselect all</button>
+      </div>
+    </div>
     <div class="country-grid">
       {% for country in country_groups %}
         <details class="country-group" open>
@@ -31,6 +37,37 @@
               <label for="zone-{{ z }}">{{ z }}</label>
             </div>
           {% endfor %}
+        </details>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-header">
+      <h2>Technology Capacities</h2>
+      <button type="button" id="reset-all-caps" class="reset-btn reset-all">Reset all to defaults</button>
+    </div>
+    <p class="note">Appears here once a zone is selected above. Each box starts at that
+      zone's own default capacity (unit shown at right) -- edit any box to use a different
+      value for the run.</p>
+    <div id="tech-capacities">
+      {% for zone, techs in zone_capacities.items %}
+        <details class="capacity-card" data-zone="{{ zone }}" {% if zone in selected_zones %}open{% endif %}>
+          <summary>
+            <span class="zone-name"><span class="disclosure-arrow" aria-hidden="true">&#9656;</span>{{ zone }}</span>
+            <button type="button" class="reset-btn reset-zone" data-zone="{{ zone }}">Reset to defaults</button>
+          </summary>
+          <div class="capacity-grid">
+            {% for tech, label, default, unit in techs %}
+              <label class="cap-field">
+                <span>{{ label }}</span>
+                <span class="cap-input-wrap">
+                  <input type="number" step="any" name="cap__{{ zone }}__{{ tech }}" value="{{ default }}">
+                  <span class="cap-unit">{{ unit }}</span>
+                </span>
+              </label>
+            {% endfor %}
+          </div>
         </details>
       {% endfor %}
     </div>
@@ -64,6 +101,30 @@
 </div>
 
 <style>
+  .section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .zone-select-actions { display: flex; gap: 8px; }
+  .reset-btn { background: none; border: 1px solid var(--border); color: var(--text);
+    padding: 5px 12px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+  .reset-btn:hover { background: #fff; }
+  #tech-capacities .capacity-card { display: none; border: 1px solid var(--border); border-radius: 8px;
+    padding: 4px 14px 12px; margin-bottom: 10px; }
+  #tech-capacities .capacity-card.zone-selected { display: block; }
+  #tech-capacities .capacity-card summary { font-weight: 600; cursor: pointer; padding: 8px 0;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; }
+  #tech-capacities .capacity-card summary::-webkit-details-marker { display: none; }
+  #tech-capacities .capacity-card summary .reset-zone { font-weight: 400; }
+  #tech-capacities .capacity-card summary .disclosure-arrow { display: inline-block; margin-right: 6px;
+    transition: transform 0.15s ease; }
+  #tech-capacities .capacity-card[open] summary .disclosure-arrow { transform: rotate(90deg); }
+  #tech-capacities .capacity-grid { display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 8px 16px; margin-top: 4px; }
+  .cap-field { display: flex; flex-direction: column; gap: 4px; }
+  .cap-field span { font-size: 12.5px; color: var(--muted); }
+  .cap-input-wrap { position: relative; display: block; }
+  .cap-field input[type=number] { background: #fff; border: 1px solid var(--border); color: var(--text);
+    padding: 7px 40px 7px 9px; border-radius: 6px; font-size: 13.5px; width: 100%; box-sizing: border-box; }
+  .cap-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    font-size: 11.5px; color: var(--muted); pointer-events: none; }
   #processing-overlay {
     display: none; position: fixed; inset: 0; background: rgba(244,246,250,.85);
     z-index: 100; align-items: center; justify-content: center;
@@ -81,6 +142,40 @@
 <script>
   document.querySelector("form").addEventListener("submit", function () {
     document.getElementById("processing-overlay").classList.add("visible");
+  });
+
+  function syncCapacityCards() {
+    document.querySelectorAll("#tech-capacities .capacity-card").forEach(function (card) {
+      var cb = document.querySelector('input[name="zones"][value="' + card.dataset.zone + '"]');
+      card.classList.toggle("zone-selected", !!(cb && cb.checked));
+    });
+  }
+  document.querySelectorAll('input[name="zones"]').forEach(function (cb) {
+    cb.addEventListener("change", syncCapacityCards);
+  });
+  syncCapacityCards();
+
+  document.getElementById("select-all-zones").addEventListener("click", function () {
+    document.querySelectorAll('input[name="zones"]').forEach(function (cb) { cb.checked = true; });
+    syncCapacityCards();
+  });
+  document.getElementById("deselect-all-zones").addEventListener("click", function () {
+    document.querySelectorAll('input[name="zones"]').forEach(function (cb) { cb.checked = false; });
+    syncCapacityCards();
+  });
+
+  document.querySelectorAll(".reset-zone").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      btn.closest(".capacity-card").querySelectorAll('.capacity-grid input[type=number]').forEach(function (inp) {
+        inp.value = inp.defaultValue;
+      });
+    });
+  });
+  document.getElementById("reset-all-caps").addEventListener("click", function () {
+    document.querySelectorAll('#tech-capacities input[type=number]').forEach(function (inp) {
+      inp.value = inp.defaultValue;
+    });
   });
 </script>
 

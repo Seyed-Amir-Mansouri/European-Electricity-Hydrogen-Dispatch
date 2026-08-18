@@ -91,6 +91,40 @@ def _zone_sum_carrier(df: pd.DataFrame, zones: list[str], H: int, ids) -> pd.Dat
     return grp.reindex(zones).fillna(0.0)
 
 
+def zone_technology_mix(build: BuildResult) -> dict[str, pd.Series]:
+    """Total electricity supplied per zone by technology over the solved
+    horizon (MWh), for a per-zone technology-mix chart -- thermal/VRES/ROR/
+    DSR generators (`gen_p`, keyed by `build.gens["tech"]`) plus each
+    storage device's net discharge (`dis`, keyed by `build.storage["kind"]`,
+    electricity carrier only -- H2 storage discharge doesn't belong in an
+    electricity mix). Non-positive totals are dropped (e.g. an always-off UC
+    fleet). Keys are raw tech/kind identifiers; turning them into display
+    labels is left to the caller (a presentation concern owned by the web UI,
+    not this module).
+    """
+    sol = extract(build)
+    gp = _ids_on_rows(sol["gen_p"]) if not sol["gen_p"].empty else pd.DataFrame()
+    dis = _ids_on_rows(sol["dis"]) if not sol["dis"].empty else pd.DataFrame()
+
+    out: dict[str, pd.Series] = {}
+    for z in build.zones:
+        totals: dict[str, float] = {}
+        if not gp.empty:
+            zone_gens = build.gens.index[build.gens["zone"] == z]
+            for gid in gp.index.intersection(zone_gens):
+                tech = build.gens.loc[gid, "tech"]
+                totals[tech] = totals.get(tech, 0.0) + float(gp.loc[gid].to_numpy().sum())
+        if not dis.empty and not build.storage.empty:
+            zone_sto = build.storage.index[
+                (build.storage["zone"] == z) & (build.storage["carrier"] == "electricity")]
+            for sid in dis.index.intersection(zone_sto):
+                kind = build.storage.loc[sid, "kind"]
+                totals[kind] = totals.get(kind, 0.0) + float(dis.loc[sid].to_numpy().sum())
+        totals = {k: v for k, v in totals.items() if v > 1e-6}
+        out[z] = pd.Series(totals, dtype=float).sort_values(ascending=False)
+    return out
+
+
 def validate(build: BuildResult, tol: float = 1e-3) -> dict[str, float]:
     """Recompute elec & H2 balances from the solution; return max residuals."""
     z = build.zones
