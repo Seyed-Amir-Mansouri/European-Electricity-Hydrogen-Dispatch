@@ -366,17 +366,27 @@ def _metrics(ours: np.ndarray, plexos: np.ndarray | None, shed: np.ndarray) -> d
     )
 
 
+_OURS_COLOR = "#06b6d4"
+_PLEXOS_COLOR = "#f43f5e"
+
+_VIVID_PALETTE = [
+    "#6366f1", "#06b6d4", "#f43f5e", "#f59e0b", "#10b981", "#8b5cf6",
+    "#ec4899", "#84cc16", "#3b82f6", "#f97316", "#14b8a6", "#a855f7",
+    "#ef4444", "#22c55e", "#eab308", "#0ea5e9",
+]
+
+
 def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None, title: str,
                  yaxis_title: str = "EUR/MWh") -> str:
-    """Interactive two-line Plotly chart: blue = ours, red = PLEXOS. Returns
+    """Interactive two-line Plotly chart: cyan = ours, rose = PLEXOS. Returns
     an HTML <div> fragment for direct embedding (plotly.js itself is loaded
     once via CDN in the base template, not repeated per chart)."""
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hours, y=ours, mode="lines", name="Ours",
-                             line=dict(color="#2563eb", width=1.8)))
+                             line=dict(color=_OURS_COLOR, width=2.2)))
     if plexos is not None:
         fig.add_trace(go.Scatter(x=hours, y=plexos, mode="lines", name="PLEXOS",
-                                 line=dict(color="#dc2626", width=1.5, dash="dot")))
+                                 line=dict(color=_PLEXOS_COLOR, width=1.8, dash="dot")))
     fig.update_layout(
         title=title, xaxis_title="Hour of year", yaxis_title=yaxis_title,
         template="plotly_white", height=320, autosize=True,
@@ -390,13 +400,17 @@ def _plot_prices(hours: np.ndarray, ours: np.ndarray, plexos: np.ndarray | None,
 def _plot_tech_share(title: str, mix: pd.Series) -> str | None:
     """Donut chart of each technology's share of a zone's total electricity
     supplied over the run's horizon (a `report.zone_technology_mix` entry,
-    raw keys already sorted largest-first). Returns None if the zone
-    generated nothing over the horizon (e.g. fully import-supplied), so the
-    caller can skip the panel instead of rendering an empty chart."""
+    raw keys already sorted largest-first), colored from `_VIVID_PALETTE`
+    (cycled if there are more technologies than palette entries). Returns
+    None if the zone generated nothing over the horizon (e.g. fully
+    import-supplied), so the caller can skip the panel instead of rendering
+    an empty chart."""
     if mix.empty:
         return None
     labels = [_generation_label(k) for k in mix.index]
-    fig = go.Figure(data=[go.Pie(labels=labels, values=mix.to_numpy(), hole=0.35, sort=False)])
+    colors = [_VIVID_PALETTE[i % len(_VIVID_PALETTE)] for i in range(len(labels))]
+    fig = go.Figure(data=[go.Pie(labels=labels, values=mix.to_numpy(), hole=0.35, sort=False,
+                                 marker=dict(colors=colors, line=dict(color="#ffffff", width=1.5)))])
     fig.update_layout(
         title=title, template="plotly_white", height=380, autosize=True,
         margin=dict(l=20, r=20, t=45, b=20),
