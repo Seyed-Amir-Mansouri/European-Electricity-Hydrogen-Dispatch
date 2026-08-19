@@ -12,31 +12,49 @@
   </div>
 {% endif %}
 
-<form method="post" action="{% url 'dispatcher:run' %}">
+<div class="stepper" id="stepper">
+  <div class="step" data-step="1"><span class="step-dot">1</span><span class="step-label">Zones &amp; countries</span></div>
+  <div class="step-line"></div>
+  <div class="step" data-step="2"><span class="step-dot">2</span><span class="step-label">Technology capacities</span><span class="step-tag">optional</span></div>
+  <div class="step-line"></div>
+  <div class="step is-done" data-step="3"><span class="step-dot">3</span><span class="step-label">Time range</span></div>
+</div>
+
+<form method="post" action="{% url 'dispatcher:run' %}" id="dispatch-form">
   {% csrf_token %}
 
   <div class="panel">
     <div class="section-header">
-      <h2>Zones / countries</h2>
+      <h2><span class="h2-badge">1</span>Zones / countries</h2>
       <div class="zone-select-actions">
-        <button type="button" id="select-all-zones" class="reset-btn">Select all</button>
-        <button type="button" id="deselect-all-zones" class="reset-btn">Deselect all</button>
+        <span class="live-count" id="zone-live-count">0 selected</span>
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.76 10.68l4.78 4.78 1.42-1.42-4.78-4.78A6 6 0 0 0 10 4Zm-4 6a4 4 0 1 1 8 0 4 4 0 0 1-8 0Z" fill="currentColor"/></svg>
+          <input type="search" id="zone-search" placeholder="Filter by country or zone code&hellip;" autocomplete="off">
+        </div>
+        <button type="button" id="select-all-zones" class="btn">Select all</button>
+        <button type="button" id="deselect-all-zones" class="btn">Deselect all</button>
       </div>
     </div>
     <div class="country-grid">
       {% for country in country_groups %}
-        <details class="country-group" open>
+        <details class="country-group" data-country="{{ country.code }}" open>
           <summary>
+            <span class="disclosure-arrow" aria-hidden="true">&#9656;</span>
             <img class="country-map" src="{% static country.map_path %}" alt="{{ country.code }} map">
             <span class="country-name">{{ country.name }}</span>
+            <span class="country-count" data-country="{{ country.code }}">0/{{ country.zones|length }}</span>
+            <button type="button" class="btn btn-xs country-toggle" data-country="{{ country.code }}">Toggle</button>
           </summary>
-          {% for z in country.zones %}
-            <div class="zone-check">
-              <input type="checkbox" id="zone-{{ z }}" name="zones" value="{{ z }}"
-                     {% if z in selected_zones %}checked{% endif %}>
-              <label for="zone-{{ z }}">{{ z }}</label>
-            </div>
-          {% endfor %}
+          <div class="zone-chip-row">
+            {% for z in country.zones %}
+              <div class="zone-check" data-zone="{{ z }}" data-country="{{ country.code }}">
+                <input type="checkbox" id="zone-{{ z }}" name="zones" value="{{ z }}"
+                       {% if z in selected_zones %}checked{% endif %}>
+                <label for="zone-{{ z }}">{{ z }}</label>
+              </div>
+            {% endfor %}
+          </div>
         </details>
       {% endfor %}
     </div>
@@ -44,8 +62,14 @@
 
   <div class="panel">
     <div class="section-header">
-      <h2>Technology Capacities</h2>
-      <button type="button" id="reset-all-caps" class="reset-btn reset-all">Reset all to defaults</button>
+      <h2><span class="h2-badge">2</span>Technology Capacities</h2>
+      <div class="zone-select-actions">
+        <div class="search-box">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.76 10.68l4.78 4.78 1.42-1.42-4.78-4.78A6 6 0 0 0 10 4Zm-4 6a4 4 0 1 1 8 0 4 4 0 0 1-8 0Z" fill="currentColor"/></svg>
+          <input type="search" id="tech-search" placeholder="Filter technologies&hellip;" autocomplete="off">
+        </div>
+        <button type="button" id="reset-all-caps" class="btn">Reset all to defaults</button>
+      </div>
     </div>
     <p class="note">Appears here once a zone is selected above. Each box starts at that
       zone's own default capacity (unit shown at right) -- edit any box to use a different
@@ -55,7 +79,8 @@
         <details class="capacity-card" data-zone="{{ zone }}" {% if zone in selected_zones %}open{% endif %}>
           <summary>
             <span class="zone-name"><span class="disclosure-arrow" aria-hidden="true">&#9656;</span>{{ zone }}</span>
-            <button type="button" class="reset-btn reset-zone" data-zone="{{ zone }}">Reset to defaults</button>
+            <span class="cap-edited-count" data-zone="{{ zone }}"></span>
+            <button type="button" class="btn btn-xs reset-zone" data-zone="{{ zone }}">Reset to defaults</button>
           </summary>
           <div class="capacity-grid">
             {% for tech, label, default, unit in techs %}
@@ -74,7 +99,7 @@
   </div>
 
   <div class="panel">
-    <h2>Time range ({{ year }})</h2>
+    <h2><span class="h2-badge">3</span>Time range ({{ year }})</h2>
     <div class="date-row">
       <div class="field">
         <label for="start_date">Start date</label>
@@ -86,12 +111,32 @@
         <input type="date" id="end_date" name="end_date" min="{{ year }}-01-01" max="{{ year }}-12-31"
                value="{{ end_date|default:'2030-01-07' }}" required>
       </div>
+      <div class="field">
+        <span class="field-label-inline">Quick presets</span>
+        <div class="preset-row">
+          <button type="button" class="btn btn-xs preset-btn" data-days="1">1 day</button>
+          <button type="button" class="btn btn-xs preset-btn" data-days="7">1 week</button>
+          <button type="button" class="btn btn-xs preset-btn" data-days="31">1 month</button>
+          <button type="button" class="btn btn-xs preset-btn" data-days="364">Full year</button>
+        </div>
+      </div>
     </div>
-    <p class="note">The dataset models a 364-day year (52 weeks); Dec 31 maps to the last modelled day.</p>
+    <p class="note">The dataset models a 364-day year (52 weeks); Dec 31 maps to the last modelled day.
+      <span id="days-live-count" class="days-badge"></span>
+    </p>
   </div>
-
-  <button class="run" type="submit">Run dispatch</button>
 </form>
+
+<div class="run-bar">
+  <div class="run-bar-inner">
+    <div class="run-summary">
+      <span class="run-chip" id="summary-zones">0 zones</span>
+      <span class="run-chip" id="summary-days">0 days</span>
+      <span class="run-chip run-chip-muted" id="summary-edits">no overrides</span>
+    </div>
+    <button class="run" type="submit" form="dispatch-form">Run dispatch &rarr;</button>
+  </div>
+</div>
 
 <div id="processing-overlay">
   <div class="processing-box">
@@ -101,32 +146,137 @@
 </div>
 
 <style>
-  .section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .zone-select-actions { display: flex; gap: 8px; }
-  .reset-btn { background: none; border: 1px solid var(--border); color: var(--text);
-    padding: 5px 12px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
-  .reset-btn:hover { background: #fff; }
-  #tech-capacities .capacity-card { display: none; border: 1px solid var(--border); border-radius: 8px;
+  .stepper { display: flex; align-items: center; gap: 10px; margin: 4px 0 22px; }
+  .step { display: flex; align-items: center; gap: 8px; }
+  .step-dot {
+    width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 12px; font-weight: 700; background: #fff;
+    border: 2px solid var(--border-strong); color: var(--faint);
+    transition: all .2s var(--ease);
+  }
+  .step.is-done .step-dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .step-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .step.is-done .step-label { color: var(--text); }
+  .step-tag {
+    font-size: 10px; color: var(--faint); border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 7px; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .step-line { flex: 1; height: 2px; background: var(--border); max-width: 60px; }
+
+  .section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 20px; }
+  .section-header h2 { margin: 0; }
+  .h2-badge {
+    display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong);
+    font-size: 10px; margin-right: 8px; vertical-align: middle;
+  }
+  .zone-select-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .live-count {
+    font-size: 12px; font-weight: 700; color: var(--accent-strong); background: var(--accent-soft);
+    padding: 5px 11px; border-radius: 999px; white-space: nowrap;
+  }
+  .search-box {
+    display: flex; align-items: center; gap: 6px; border: 1.5px solid var(--border);
+    border-radius: 999px; padding: 6px 12px; background: #fff; color: var(--faint);
+    transition: border-color .15s var(--ease);
+  }
+  .search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .search-box input { border: none; outline: none; padding: 0; font-size: 12.5px; width: 190px; color: var(--text); }
+
+  .btn-xs { padding: 4px 10px; font-size: 11.5px; }
+
+  .country-grid { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
+  .country-group {
+    border: 1.5px solid var(--border); border-radius: var(--radius); padding: 10px 14px;
+    background: var(--panel-alt); transition: border-color .15s var(--ease), background .15s var(--ease);
+  }
+  .country-group[open] { background: #fff; border-color: var(--border-strong); }
+  .country-group.has-selection { border-color: var(--accent); }
+  .country-group summary {
+    list-style: none; cursor: pointer; display: flex; flex-direction: row; align-items: center;
+    gap: 9px; padding: 2px 0;
+  }
+  .country-group summary::-webkit-details-marker { display: none; }
+  .country-group .disclosure-arrow { font-size: 10px; color: var(--faint); transition: transform .15s var(--ease); flex: none; }
+  .country-group[open] .disclosure-arrow { transform: rotate(90deg); }
+  .country-group .country-map { width: 30px; height: 30px; flex: none; }
+  .country-name { font-weight: 700; font-size: 13.5px; flex: 1; min-width: 0; }
+  .country-count {
+    font-size: 11px; font-weight: 700; color: var(--faint); background: var(--panel-alt);
+    border: 1px solid var(--border); padding: 2px 7px; border-radius: 999px; flex: none;
+  }
+  .country-group.has-selection .country-count { color: var(--accent-strong); background: var(--accent-soft); border-color: var(--accent-soft-2); }
+
+  .zone-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .zone-check {
+    border: 1.5px solid var(--border); border-radius: 999px; padding: 4px 11px 4px 8px;
+    display: flex; align-items: center; gap: 6px; cursor: pointer; background: #fff;
+    transition: all .15s var(--ease);
+  }
+  .zone-check:hover { border-color: var(--border-strong); }
+  .zone-check:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+  .zone-check input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; margin: 0; }
+  .zone-check label { cursor: pointer; font-size: 12.5px; font-weight: 600; }
+  .zone-check.is-filtered-out { display: none; }
+  .country-group.is-filtered-out { display: none; }
+
+  #tech-capacities .capacity-card { display: none; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 4px 14px 12px; margin-bottom: 10px; }
   #tech-capacities .capacity-card.zone-selected { display: block; }
   #tech-capacities .capacity-card summary { font-weight: 600; cursor: pointer; padding: 8px 0;
-    display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; }
+    display: flex; align-items: center; gap: 12px; list-style: none; }
   #tech-capacities .capacity-card summary::-webkit-details-marker { display: none; }
-  #tech-capacities .capacity-card summary .reset-zone { font-weight: 400; }
+  .zone-name { display: flex; align-items: center; }
+  #tech-capacities .capacity-card summary .zone-name { flex: none; }
+  #tech-capacities .capacity-card summary .reset-zone { margin-left: auto; }
   #tech-capacities .capacity-card summary .disclosure-arrow { display: inline-block; margin-right: 6px;
     transition: transform 0.15s ease; }
   #tech-capacities .capacity-card[open] summary .disclosure-arrow { transform: rotate(90deg); }
+  .cap-edited-count {
+    font-size: 10.5px; font-weight: 700; color: var(--accent-strong); background: var(--accent-soft);
+    border-radius: 999px; padding: 2px 8px; display: none;
+  }
+  .cap-edited-count.is-visible { display: inline-block; }
   #tech-capacities .capacity-grid { display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 8px 16px; margin-top: 4px; }
-  .cap-field { display: flex; flex-direction: column; gap: 4px; }
+  .cap-field { display: flex; flex-direction: column; gap: 4px; transition: opacity .12s var(--ease); }
+  .cap-field.is-filtered-out { display: none; }
   .cap-field span { font-size: 12.5px; color: var(--muted); }
   .cap-input-wrap { position: relative; display: block; }
-  .cap-field input[type=number] { background: #fff; border: 1px solid var(--border); color: var(--text);
-    padding: 7px 40px 7px 9px; border-radius: 6px; font-size: 13.5px; width: 100%; box-sizing: border-box; }
+  .cap-field input[type=number] { background: #fff; border: 1.5px solid var(--border); color: var(--text);
+    padding: 7px 40px 7px 9px; border-radius: var(--radius-sm); font-size: 13.5px; width: 100%; box-sizing: border-box; }
+  .cap-field input[type=number].is-edited { border-color: var(--accent); background: var(--accent-soft); }
   .cap-unit { position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
     font-size: 11.5px; color: var(--muted); pointer-events: none; }
+
+  .field-label-inline { font-size: 13px; color: var(--muted); }
+  .preset-row { display: flex; gap: 6px; margin-top: 2px; }
+  .days-badge {
+    display: inline-block; margin-left: 8px; font-weight: 700; color: var(--accent-strong);
+    background: var(--accent-soft); padding: 1px 8px; border-radius: 999px; font-size: 11.5px;
+  }
+
+  .run-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: rgba(255, 255, 255, .82); backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    border-top: 1px solid var(--border); box-shadow: 0 -8px 30px -18px rgba(20,30,60,.35);
+  }
+  .run-bar-inner {
+    max-width: 1180px; margin: 0 auto; padding: 12px 32px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .run-summary { display: flex; gap: 8px; flex-wrap: wrap; }
+  .run-chip {
+    font-size: 12px; font-weight: 700; color: var(--accent-strong); background: var(--accent-soft);
+    border: 1px solid var(--accent-soft-2); padding: 5px 12px; border-radius: 999px;
+  }
+  .run-chip-muted { color: var(--muted); background: var(--panel-alt); border-color: var(--border); }
+
   #processing-overlay {
-    display: none; position: fixed; inset: 0; background: rgba(244,246,250,.85);
+    display: none; position: fixed; inset: 0; background: rgba(238, 241, 248, .88);
+    backdrop-filter: blur(3px);
     z-index: 100; align-items: center; justify-content: center;
   }
   #processing-overlay.visible { display: flex; }
@@ -140,7 +290,9 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <script>
-  document.querySelector("form").addEventListener("submit", function () {
+  var zoneCheckboxes = function () { return document.querySelectorAll('input[name="zones"]'); };
+
+  document.getElementById("dispatch-form").addEventListener("submit", function () {
     document.getElementById("processing-overlay").classList.add("visible");
   });
 
@@ -150,18 +302,114 @@
       card.classList.toggle("zone-selected", !!(cb && cb.checked));
     });
   }
-  document.querySelectorAll('input[name="zones"]').forEach(function (cb) {
-    cb.addEventListener("change", syncCapacityCards);
+
+  function updateCountryCounts() {
+    document.querySelectorAll(".country-group").forEach(function (group) {
+      var boxes = group.querySelectorAll('input[name="zones"]');
+      var checked = group.querySelectorAll('input[name="zones"]:checked').length;
+      var badge = document.querySelector('.country-count[data-country="' + group.dataset.country + '"]');
+      if (badge) badge.textContent = checked + "/" + boxes.length;
+      group.classList.toggle("has-selection", checked > 0);
+    });
+  }
+
+  function updateSummary() {
+    var zonesChecked = document.querySelectorAll('input[name="zones"]:checked').length;
+    document.getElementById("zone-live-count").textContent = zonesChecked + " selected";
+    document.getElementById("summary-zones").textContent = zonesChecked + (zonesChecked === 1 ? " zone" : " zones");
+
+    var start = new Date(document.getElementById("start_date").value);
+    var end = new Date(document.getElementById("end_date").value);
+    var days = 0;
+    if (!isNaN(start) && !isNaN(end) && end >= start) {
+      days = Math.round((end - start) / 86400000) + 1;
+    }
+    document.getElementById("summary-days").textContent = days + (days === 1 ? " day" : " days");
+    document.getElementById("days-live-count").textContent = days ? days + " day" + (days === 1 ? "" : "s") + " selected" : "";
+
+    var edited = Array.prototype.filter.call(
+      document.querySelectorAll('#tech-capacities input[type=number]'),
+      function (inp) { return inp.value !== inp.defaultValue; }).length;
+    var editsEl = document.getElementById("summary-edits");
+    editsEl.textContent = edited ? edited + " custom capacit" + (edited === 1 ? "y" : "ies") : "no overrides";
+    editsEl.classList.toggle("run-chip-muted", edited === 0);
+
+    document.getElementById("stepper").querySelector('.step[data-step="1"]').classList.toggle("is-done", zonesChecked > 0);
+    document.getElementById("stepper").querySelector('.step[data-step="2"]').classList.toggle("is-done", edited > 0);
+  }
+
+  function updateEditedInput(inp) {
+    inp.classList.toggle("is-edited", inp.value !== inp.defaultValue);
+  }
+
+  function updateZoneEditCounts() {
+    document.querySelectorAll("#tech-capacities .capacity-card").forEach(function (card) {
+      var n = Array.prototype.filter.call(
+        card.querySelectorAll('input[type=number]'),
+        function (inp) { return inp.value !== inp.defaultValue; }).length;
+      var badge = document.querySelector('.cap-edited-count[data-zone="' + card.dataset.zone + '"]');
+      if (badge) {
+        badge.textContent = n ? n + " edited" : "";
+        badge.classList.toggle("is-visible", n > 0);
+      }
+    });
+  }
+
+  function refreshAll() {
+    syncCapacityCards();
+    updateCountryCounts();
+    updateZoneEditCounts();
+    updateSummary();
+  }
+
+  zoneCheckboxes().forEach(function (cb) { cb.addEventListener("change", refreshAll); });
+  document.getElementById("start_date").addEventListener("change", updateSummary);
+  document.getElementById("end_date").addEventListener("change", updateSummary);
+  document.querySelectorAll('#tech-capacities input[type=number]').forEach(function (inp) {
+    inp.addEventListener("input", function () { updateEditedInput(inp); updateZoneEditCounts(); updateSummary(); });
   });
-  syncCapacityCards();
 
   document.getElementById("select-all-zones").addEventListener("click", function () {
-    document.querySelectorAll('input[name="zones"]').forEach(function (cb) { cb.checked = true; });
-    syncCapacityCards();
+    zoneCheckboxes().forEach(function (cb) { if (!cb.closest(".is-filtered-out")) cb.checked = true; });
+    refreshAll();
   });
   document.getElementById("deselect-all-zones").addEventListener("click", function () {
-    document.querySelectorAll('input[name="zones"]').forEach(function (cb) { cb.checked = false; });
-    syncCapacityCards();
+    zoneCheckboxes().forEach(function (cb) { cb.checked = false; });
+    refreshAll();
+  });
+
+  document.querySelectorAll(".country-toggle").forEach(function (btn) {
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      var group = btn.closest(".country-group");
+      var boxes = group.querySelectorAll('input[name="zones"]');
+      var anyUnchecked = Array.prototype.some.call(boxes, function (cb) { return !cb.checked; });
+      boxes.forEach(function (cb) { cb.checked = anyUnchecked; });
+      refreshAll();
+    });
+  });
+
+  document.getElementById("zone-search").addEventListener("input", function () {
+    var q = this.value.trim().toLowerCase();
+    document.querySelectorAll(".country-group").forEach(function (group) {
+      var countryMatch = group.querySelector(".country-name").textContent.toLowerCase().indexOf(q) !== -1;
+      var anyZoneMatch = false;
+      group.querySelectorAll(".zone-check").forEach(function (chip) {
+        var match = countryMatch || chip.dataset.zone.toLowerCase().indexOf(q) !== -1;
+        chip.classList.toggle("is-filtered-out", !match && q !== "");
+        if (match) anyZoneMatch = true;
+      });
+      group.classList.toggle("is-filtered-out", q !== "" && !countryMatch && !anyZoneMatch);
+      if (q !== "" && (countryMatch || anyZoneMatch)) group.open = true;
+    });
+  });
+
+  document.getElementById("tech-search").addEventListener("input", function () {
+    var q = this.value.trim().toLowerCase();
+    document.querySelectorAll("#tech-capacities .cap-field").forEach(function (field) {
+      var match = field.querySelector("span").textContent.toLowerCase().indexOf(q) !== -1;
+      field.classList.toggle("is-filtered-out", !match && q !== "");
+    });
   });
 
   document.querySelectorAll(".reset-zone").forEach(function (btn) {
@@ -169,14 +417,35 @@
       e.preventDefault();
       btn.closest(".capacity-card").querySelectorAll('.capacity-grid input[type=number]').forEach(function (inp) {
         inp.value = inp.defaultValue;
+        updateEditedInput(inp);
       });
+      updateZoneEditCounts();
+      updateSummary();
     });
   });
   document.getElementById("reset-all-caps").addEventListener("click", function () {
     document.querySelectorAll('#tech-capacities input[type=number]').forEach(function (inp) {
       inp.value = inp.defaultValue;
+      updateEditedInput(inp);
     });
+    updateZoneEditCounts();
+    updateSummary();
   });
+
+  function setPreset(days) {
+    var start = new Date(document.getElementById("start_date").value || "2030-01-01");
+    if (isNaN(start)) start = new Date("2030-01-01");
+    var end = new Date(start.getTime() + (days - 1) * 86400000);
+    var cap = new Date("2030-12-31");
+    if (end > cap) end = cap;
+    document.getElementById("end_date").value = end.toISOString().slice(0, 10);
+    updateSummary();
+  }
+  document.querySelectorAll(".preset-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () { setPreset(parseInt(btn.dataset.days, 10)); });
+  });
+
+  refreshAll();
 </script>
 
 {% endblock %}
