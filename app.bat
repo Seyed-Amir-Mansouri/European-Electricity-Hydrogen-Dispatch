@@ -20,11 +20,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem linopy depends on plain "polars", which pulls it in alongside
-rem polars-lts-cpu above -- both install into the same on-disk "polars"
-rem package folder, so whichever installs last silently wins. This CPU
-rem has no AVX2, so plain polars crashes on import; force polars-lts-cpu
-rem back on top every time.
 echo Ensuring polars-lts-cpu (not plain polars) is active...
 ".venv\Scripts\python.exe" -m pip uninstall -y polars
 ".venv\Scripts\python.exe" -m pip install --force-reinstall --no-deps polars-lts-cpu
