@@ -91,6 +91,8 @@
                   <span class="cap-unit">{{ unit }}</span>
                 </span>
               </label>
+            {% empty %}
+              <p class="note cap-empty">No installed technology capacity data for this zone.</p>
             {% endfor %}
           </div>
         </details>
